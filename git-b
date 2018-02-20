@@ -3,6 +3,29 @@
 from sys import argv
 from enum import Enum, unique
 from subprocess import run, PIPE
+import csv
+
+def error(msg, code=1):
+    print('git-b: ' + msg)
+    exit(code)
+
+def rem_end_nl(s):
+    return s[:-1] if s[-1:] == '\n' else s
+
+def cmd(cmd_list):
+    res = run(cmd_list, stdout=PIPE)
+    if res.returncode != 0:
+        error("The command '" + ' '.join(cmd_list) + "' exited with code " + str(res.returncode))
+        exit(res.returncode)
+    retstr = res.stdout.decode('utf-8')
+    return rem_end_nl(retstr)
+
+history_len = 30
+dot_git = cmd(['git', 'rev-parse', '--show-toplevel']) + '/.git'
+history_path = dot_git + '/git-b-history'
+augmentations_path = dot_git + '/git-b-augmentations'
+
+# parser
 
 @unique
 class Token(Enum): # token
@@ -34,7 +57,7 @@ def option_token(arg):
                ('-lh', '--list-history'): Token.LIST_HISTORY,
                ('-rl', '--raw-list'): Token.RAW_LIST,
                ('-rh', '--raw-history'): Token.RAW_LIST_HISTORY,
-               ('-h'): Token.HELP}
+               ('-h', '--help'): Token.HELP}
     for names, token in opt2tok.items():
         if arg in names:
             return token
@@ -50,65 +73,98 @@ def token(arg):
 def parse(args):
     return map(lambda arg: {'type': token(arg), 'lexem': arg}, args)
 
-def is_branch(tok):
-    return tok.type == Token.STR or tok.type == Token.OPT
+# representation
 
-def go_to_branch_by_name(tokens):
-    t = next(tokens)
+def branches():
+    # git for-each-ref --format='%(refname:short)' refs/heads/
+    retstr = cmd(['git', 'for-each-ref', '--format="%(refname:short)"', 'refs/heads/'])
+    return list(map(lambda ln: ln.strip('"'), retstr.split('\n')))
 
-def go_to_branch_by_id(tokens):
+def augment():
+    # TODO: continue
+    # with open()
+
+def menu():
+    ''
+
+def history():
+    with open(history_path, mode='r') as f:
+        return list(map(lambda ln: rem_end_nl(ln), f))
+
+# commands implementations
+
+def cur_branch():
+    return cmd(['git', 'rev-parse', '--abbrev-ref', 'HEAD'])
+
+def cut_history(history_file):
+    history_file.writelines(list(history_file)[-history_len:])
+
+def change_branch(name):
+    original_branch = cur_branch()
+    cmd(['git', 'checkout', name])
+    with open(history_path, mode='a+') as f:
+        cut_history(f)
+        f.write(original_branch + '\n')
+
+def go_to_branch_by_name(t, tokens):
+    change_branch(t['lexem'])
+
+def go_to_branch_by_id(t, tokens):
     ""
 
-def go_to_prev_branch(tokens):
-    ""
+def go_to_prev_branch(t, tokens):
+    with open(history_path, mode='r') as f:
+        name = list(f)[-1][:-1]
+    change_branch(name)
 
-def go_to_branch_by_history(tokens):
-    ""
+def go_to_branch_by_history(t, tokens):
+    change_branch(menu(augment(history_list())))
 
-def new_brnach(tokens):
+def new_brnach(t, tokens):
     # TODO: add -n B -a A syntax
     def co_new(name):
-        res = run(['git', 'checkout', '-b', name])
-        if res.returncode != 0:
-            exit(res.returncode)
+        cmd(['git', 'checkout', '-b', name])
     try:
         t = next(tokens)
         if t['type'] != Token.STR:
-            print('git-b: Bad branch name: ' + t['lexem'])
-            exit(1)
-        co_new(t['lexem'])        
+            error('Bad branch name: ' + t['lexem'])
+        co_new(t['lexem'])
     except StopIteration:
         co_new(input('branch name> '))
-        
-def annotate(tokens):
+
+def annotate(t, tokens):
     ""
 
-def new_annotate(tokens):
+def new_annotate(t, tokens):
     ""
 
-def delete_branch(tokens):
+def delete_branch(t, tokens):
     ""
 
-def force_delete_branch(tokens):
+def force_delete_branch(t, tokens):
     ""
 
-def print_augmented_branch_list(tokens):
-    ""
+def print_augmented_branch_list(t, tokens):
+    print(augment(branches()))
 
-def print_augmented_history(tokens):
-    ""
+def print_augmented_history(t, tokens):
+    print(augment(history()))
 
-def print_raw_branch_list(tokens):
-    ""
+def print_raw_branch_list(t, tokens):
+    print('\n'.join(branches()))
 
-def print_raw_history(tokens):
-    ""
+def print_raw_history(t, tokens):
+    print('\n'.join(history()))
 
-def print_help(tokens):
-    ""
+def print_help(t, tokens):
+    print('IM HELPIN U')
 
 def git_b(args):
-    tokens = parse(args)    
+    if not args:
+        change_branch(menu(augment(branches())))
+        exit(0)
+
+    tokens = parse(args)
     type2fn = {
         Token.STR: go_to_branch_by_name,
         Token.ID: go_to_branch_by_id,
@@ -127,10 +183,9 @@ def git_b(args):
     }
     try:
         t = next(tokens)
-        type2fn[t['type']](tokens)
+        type2fn[t['type']](t, tokens)
     except KeyError:
-        print('git-b: Bad argument: ' + t['lexem'])
-        exit(1)
+        error('Bad argument: ' + t['lexem'])
     except KeyboardInterrupt:
         exit(0)
 
