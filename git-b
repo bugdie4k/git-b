@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+
+from sys import argv
+from enum import Enum, unique
+from subprocess import run, PIPE
+
+@unique
+class Token(Enum): # token
+    ID = 1
+    STR = 2
+    # options
+    PREV = 3
+    HISTORY = 4
+    NEW = 5
+    ANNOTATE = 6
+    NEW_ANNOTATE = 7
+    DELETE = 8
+    FORCE_DELETE = 9
+    LIST = 10
+    LIST_HISTORY = 11
+    RAW_LIST = 12
+    RAW_LIST_HISTORY = 13
+    HELP = 14
+
+def option_token(arg):
+    opt2tok = {('-'): Token.PREV,
+               ('-i', '--history'): Token.HISTORY,
+               ('-n', '--new'): Token.NEW,
+               ('-a', '--annotate'): Token.NEW_ANNOTATE,
+               ('-na', '--new-annotate'): Token.NEW_ANNOTATE,
+               ('-d', '--delete'): Token.DELETE,
+               ('-D', '--force-delete'): Token.FORCE_DELETE,
+               ('-l', '--list'): Token.LIST,
+               ('-lh', '--list-history'): Token.LIST_HISTORY,
+               ('-rl', '--raw-list'): Token.RAW_LIST,
+               ('-rh', '--raw-history'): Token.RAW_LIST_HISTORY,
+               ('-h'): Token.HELP}
+    for names, token in opt2tok.items():
+        if arg in names:
+            return token
+    return None
+
+def token(arg):
+    if arg[0] == '-':
+        return option_token(arg)
+    if arg[0] == ':':
+        return Token.ID
+    return Token.STR
+
+def parse(args):
+    return map(lambda arg: {'type': token(arg), 'lexem': arg}, args)
+
+def is_branch(tok):
+    return tok.type == Token.STR or tok.type == Token.OPT
+
+def go_to_branch_by_name(tokens):
+    t = next(tokens)
+
+def go_to_branch_by_id(tokens):
+    ""
+
+def go_to_prev_branch(tokens):
+    ""
+
+def go_to_branch_by_history(tokens):
+    ""
+
+def new_brnach(tokens):
+    # TODO: add -n B -a A syntax
+    def co_new(name):
+        res = run(['git', 'checkout', '-b', name])
+        if res.returncode != 0:
+            exit(res.returncode)
+    try:
+        t = next(tokens)
+        if t['type'] != Token.STR:
+            print('git-b: Bad branch name: ' + t['lexem'])
+            exit(1)
+        co_new(t['lexem'])        
+    except StopIteration:
+        co_new(input('branch name> '))
+        
+def annotate(tokens):
+    ""
+
+def new_annotate(tokens):
+    ""
+
+def delete_branch(tokens):
+    ""
+
+def force_delete_branch(tokens):
+    ""
+
+def print_augmented_branch_list(tokens):
+    ""
+
+def print_augmented_history(tokens):
+    ""
+
+def print_raw_branch_list(tokens):
+    ""
+
+def print_raw_history(tokens):
+    ""
+
+def print_help(tokens):
+    ""
+
+def git_b(args):
+    tokens = parse(args)    
+    type2fn = {
+        Token.STR: go_to_branch_by_name,
+        Token.ID: go_to_branch_by_id,
+        Token.PREV: go_to_prev_branch,
+        Token.HISTORY: go_to_branch_by_history,
+        Token.NEW: new_brnach,
+        Token.ANNOTATE: annotate,
+        Token.NEW_ANNOTATE: new_annotate,
+        Token.DELETE: delete_branch,
+        Token.FORCE_DELETE: force_delete_branch,
+        Token.LIST: print_augmented_branch_list,
+        Token.LIST_HISTORY: print_augmented_history,
+        Token.RAW_LIST: print_raw_branch_list,
+        Token.RAW_LIST_HISTORY: print_raw_history,
+        Token.HELP: print_help
+    }
+    try:
+        t = next(tokens)
+        type2fn[t['type']](tokens)
+    except KeyError:
+        print('git-b: Bad argument: ' + t['lexem'])
+        exit(1)
+    except KeyboardInterrupt:
+        exit(0)
+
+if __name__ == '__main__':
+    git_b(argv[1:])
