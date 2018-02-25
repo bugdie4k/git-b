@@ -284,6 +284,22 @@ def delete_branch_by_id(id, option='-d'):
     data, _ = branch_metadata(branches())
     delete_branch_by_name(make_id_a_key(data)[id]['branch'], option)
 
+def to_id(token):
+    return token['lexem'][1:]
+
+def common_delete_branch(t, tokens, option='-d'):
+    try:
+        t = next(tokens)
+    except StopIteration:
+        delete_branch_by_name(menu(augment(branches())), option)
+    else:
+        if t['type'] == Token.STR:
+            delete_branch_by_name(t['lexem'], option)
+        elif t['type'] == Token.ID:
+            delete_branch_by_id(to_id(t), option)
+        else:
+            bad_argument(t['lexem'])
+
 # commands
 
 def go_to_branch_by_name(t, tokens):
@@ -291,7 +307,7 @@ def go_to_branch_by_name(t, tokens):
 
 def go_to_branch_by_id(t, tokens):
     data, _ = branch_metadata(branches())
-    change_branch(make_id_a_key(data)[t['lexem']]['branch'])
+    change_branch(make_id_a_key(data)[to_id(t)]['branch'])
 
 def go_to_prev_branch(t, tokens):
     try:
@@ -329,20 +345,10 @@ def new_annotate(t, tokens):
     ""
 
 def delete_branch(t, tokens):
-    try:
-        t = next(tokens)
-    except StopIteration:
-        delete_branch_by_name(menu(augment(branches())))
-    else:
-        if t['type'] == Token.STR:
-            delete_branch_by_name(t['lexem'])
-        elif t['type'] == Token.ID:
-            delete_branch_by_id(t['lexem'])
-        else:
-            bad_argument(t['lexem'])            
+    common_delete_branch(t, tokens, '-d')
 
 def force_delete_branch(t, tokens):
-    ""
+    common_delete_branch(t, tokens, '-D')
 
 def print_augmented_branches(t, tokens):
     print_str_list(augment(branches())[0])
@@ -385,7 +391,7 @@ def git_b(args):
         t = next(tokens)
         command_fn = type2fn[t['type']]
     except KeyError:
-        bad_argument(t['lexem'])        
+        bad_argument(t['lexem'])
     else:
         command_fn(t, tokens)
 
