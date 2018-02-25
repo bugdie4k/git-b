@@ -9,8 +9,8 @@ def error(msg, code=1):
     print('git-b: ' + msg)
     exit(code)
 
-def bad_argument(arg):
-    error('Bad argument: ' + arg)
+def bad_argument(tok):
+    error('Bad argument: ' + tok['lexem'])
 
 def history_is_empty():
     error('The history is empty')
@@ -41,23 +41,25 @@ class Token(Enum):
     # options
     PREV = 3
     HISTORY = 4
-    NEW = 5
-    ANNOTATE = 6
-    NEW_ANNOTATE = 7
-    DELETE = 8
-    FORCE_DELETE = 9
-    LIST = 10
-    LIST_HISTORY = 11
-    RAW_LIST = 12
-    RAW_LIST_HISTORY = 13
-    HELP = 14
+    BRANCH = 5
+    NEW = 6
+    ANNOTATE = 7
+    STATUS = 8
+    DELETE = 9
+    FORCE_DELETE = 10
+    LIST = 11
+    LIST_HISTORY = 12
+    RAW_LIST = 13
+    RAW_LIST_HISTORY = 14
+    HELP = 15
 
 def option_token(arg):
     opt2tok = {('-'): Token.PREV,
                ('-i', '--history'): Token.HISTORY,
+               ('-b', '--branch'): Token.BRANCH,
                ('-n', '--new'): Token.NEW,
-               ('-a', '--annotate'): Token.NEW_ANNOTATE,
-               ('-na', '--new-annotate'): Token.NEW_ANNOTATE,
+               ('-a', '--annotate'): Token.ANNOTATE,
+               ('-s', '--status'): Token.STATUS,
                ('-d', '--delete'): Token.DELETE,
                ('-D', '--force-delete'): Token.FORCE_DELETE,
                ('-l', '--list'): Token.LIST,
@@ -65,16 +67,18 @@ def option_token(arg):
                ('-rl', '--raw-list'): Token.RAW_LIST,
                ('-rh', '--raw-history'): Token.RAW_LIST_HISTORY,
                ('-h', '--help'): Token.HELP}
-    for names, token in opt2tok.items():
+    for names, tok in opt2tok.items():
         if arg in names:
-            return token
-    return None
+            return tok
+    error('Bad option: ' + arg)
 
 def token(arg):
-    if arg[0] == '-':
-        return option_token(arg)
-    if arg[0] == ':':
-        return Token.ID
+    if arg:
+        if arg[0] == '-':
+            return option_token(arg)
+        if arg[0] == ':':
+            return Token.ID
+    # it may as well be an empty string
     return Token.STR
 
 def parse(args):
@@ -82,8 +86,7 @@ def parse(args):
 
 # implementation
 
-def branches():
-    # git for-each-ref --format='%(refname:short)' refs/heads/
+def branches():    
     retstr = cmd('git', 'for-each-ref', '--format="%(refname:short)"', 'refs/heads/')
     return list(map(lambda ln: ln.strip('"'), retstr.split('\n')))
 
@@ -96,8 +99,7 @@ def read_metadata():
         reader = csv.DictReader(f, ['recency', 'branch', 'id', 'annotation', 'status'])
         metadata = {}
         maxrecency = -1
-        for row in reader:
-            # print('row', row)
+        for row in reader:            
             recency = int(row['recency'])
             if recency > maxrecency:
                 maxrecency = recency
@@ -148,6 +150,13 @@ def cmp_branch_datas(this, other):
 def sort_by_recency(data):
     data_list = map(lambda kv: dict(kv[1], branch=kv[0]), data.items())
     return sorted(data_list, key=cmp_to_key(cmp_branch_datas))
+
+def rewrite(data):
+    with open(augmentations_path, mode='w') as f:
+        writer = csv.writer(f)
+        for b, b_data in data.items():
+            writer.writerow([b_data['recency'], b, b_data['id'], b_data['annotation'], b_data['status']])
+    return data
 
 def fix_difference(difference, data, maxrecency):
     newrecency = maxrecency + 1
@@ -206,13 +215,6 @@ def unique_id(ids):
         if not id in ids_set:
             return id
 
-def rewrite(data):
-    with open(augmentations_path, mode='w') as f:
-        writer = csv.writer(f)
-        for b, b_data in data.items():
-            writer.writerow([b_data['recency'], b, b_data['id'], b_data['annotation'], b_data['status']])
-    return data
-
 def augment(branch_list):
     data, maxrecency = branch_metadata(branch_list)
     this_branch = cur_branch()
@@ -234,8 +236,7 @@ def make_id_a_key(data):
     return data_by_id
 
 def menu(augmented_list_and_data):
-    augmented_list, data = augmented_list_and_data
-    # print(data)
+    augmented_list, data = augmented_list_and_data    
     for line in augmented_list:
         print(line)
     try:
@@ -280,14 +281,15 @@ def delete_branch_by_name(name, option='-d'):
     delete_report = cmd('git', 'branch', option, name)
     print(delete_report)
 
-def delete_branch_by_id(id, option='-d'):
-    data, _ = branch_metadata(branches())
-    delete_branch_by_name(make_id_a_key(data)[id]['branch'], option)
+def to_id(tok):
+    return tok['lexem'][1:]
 
-def to_id(token):
-    return token['lexem'][1:]
+def branch_from_id(tok):
+    data, _ = branch_metadata(branches())
+    return make_id_a_key(data)[to_id(tok)]['branch']
 
 def common_delete_branch(t, tokens, option='-d'):
+    # TODO: deleting several branches
     try:
         t = next(tokens)
     except StopIteration:
@@ -296,9 +298,9 @@ def common_delete_branch(t, tokens, option='-d'):
         if t['type'] == Token.STR:
             delete_branch_by_name(t['lexem'], option)
         elif t['type'] == Token.ID:
-            delete_branch_by_id(to_id(t), option)
+            delete_branch_by_name(branch_from_id(t), option)
         else:
-            bad_argument(t['lexem'])
+            bad_argument(t)
 
 # commands
 
@@ -306,8 +308,7 @@ def go_to_branch_by_name(t, tokens):
     change_branch(t['lexem'])
 
 def go_to_branch_by_id(t, tokens):
-    data, _ = branch_metadata(branches())
-    change_branch(make_id_a_key(data)[to_id(t)]['branch'])
+    change_branch(branch_from_id(t))
 
 def go_to_prev_branch(t, tokens):
     try:
@@ -338,11 +339,48 @@ def new_branch(t, tokens):
             error('Bad branch name: ' + t['lexem'])
         change_branch(t['lexem'], minus_b=True)
 
-def annotate(t, tokens):
-    ""
+def make_an_annotation(name, annotation):
+    data, _ = branch_metadata(branches())
+    data[name]['annotation'] = annotation
+    rewrite(data)
+    exit(0)
 
-def new_annotate(t, tokens):
-    ""
+def annotate(t, tokens):
+    # TODO: figure out a way to make it better
+    # maybe collect all the stuff beforehand
+    # maybe abandon these not so useful cool syntax
+    annotation = []
+    try:
+        t = next(tokens)
+    except StopIteration:
+        make_an_annotation(menu(augment(branches())), input('annotation> '))
+    else:        
+        annotation.append(t['lexem'])
+        while True:
+            try:
+                t = next(tokens)
+            except StopIteration:
+                make_an_annotation(menu(augment(branches())), ' '.join(annotation))
+            else:
+                if t['type'] != Token.STR:
+                    break
+                else:
+                    annotation.append(t['lexem'])
+        if t['type'] == Token.BRANCH:
+            try:
+                t = next(tokens)
+            except StopIteration:
+                error('Expected a branch name or id after ' + t['lexem'] + ' option')
+            else:
+                if t['type'] == Token.STR:
+                    make_an_annotation(t['lexem'], ' '.join(annotation))
+                elif t['type'] == Token.ID:
+                    make_an_annotation(branch_from_id(t['lexem']),' '.join(annotation))
+                else:
+                    bad_argument(t)
+
+def status(t, tokens):
+    pass
 
 def delete_branch(t, tokens):
     common_delete_branch(t, tokens, '-d')
@@ -376,9 +414,10 @@ def git_b(args):
         Token.ID: go_to_branch_by_id,
         Token.PREV: go_to_prev_branch,
         Token.HISTORY: go_to_branch_by_history,
+        Token.BRANCH: lambda: error('not implemented'),
         Token.NEW: new_branch,
         Token.ANNOTATE: annotate,
-        Token.NEW_ANNOTATE: new_annotate,
+        Token.STATUS: status,
         Token.DELETE: delete_branch,
         Token.FORCE_DELETE: force_delete_branch,
         Token.LIST: print_augmented_branches,
@@ -391,7 +430,7 @@ def git_b(args):
         t = next(tokens)
         command_fn = type2fn[t['type']]
     except KeyError:
-        bad_argument(t['lexem'])
+        bad_argument(t)
     else:
         command_fn(t, tokens)
 
