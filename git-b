@@ -9,49 +9,59 @@ def error(msg, code=1):
     print('git-b: ' + msg)
     exit(code)
 
-def bad_argument(tok):
-    error('Bad argument: ' + tok['lexem'])
-
-def history_is_empty():
-    error('The history is empty')
-
 def rem_end_nl(s):
     return s[:-1] if s[-1:] == '\n' else s
 
 def cmd(*cmd_list):
     res = run(cmd_list, stdout=PIPE)
     if res.returncode != 0:
-        error("The command '" + ' '.join(cmd_list) + "' exited with code " + str(res.returncode))
+        error("\n  The command:\n      " \
+              + ' '.join(cmd_list) \
+              + "\n  exited with code:\n      " \
+              + str(res.returncode))
         exit(res.returncode)
     retstr = res.stdout.decode('utf-8')
     return rem_end_nl(retstr)
 
+# globals
+
+dot_git = cmd('git', 'rev-parse', '--show-toplevel') + '/.git'
+
 history_upper_limit = 30
 history_lower_limit = 10
-dot_git = cmd('git', 'rev-parse', '--show-toplevel') + '/.git'
 history_path = dot_git + '/git-b-history'
-augmentations_path = dot_git + '/git-b-augmentations'
 
-# parser
+# lexer
+
+def integers(start=0):
+    i = start - 1
+    while True:
+        i += 1
+        yield i
 
 @unique
 class Token(Enum):
-    ID = 1
-    STR = 2
+    ints = integers(1)
+    #
+    ID = next(ints)
+    STR = next(ints)
     # options
-    PREV = 3
-    HISTORY = 4
-    BRANCH = 5
-    NEW = 6
-    ANNOTATE = 7
-    STATUS = 8
-    DELETE = 9
-    FORCE_DELETE = 10
-    LIST = 11
-    LIST_HISTORY = 12
-    RAW_LIST = 13
-    RAW_LIST_HISTORY = 14
-    HELP = 15
+    PREV = next(ints)
+    HISTORY = next(ints)
+    BRANCH = next(ints)
+    NEW = next(ints)
+    ANNOTATE = next(ints)
+    STATUS = next(ints)
+    DELETE = next(ints)
+    FORCE_DELETE = next(ints)
+    LIST = next(ints)
+    LIST_HISTORY = next(ints)
+    SHOW_DELETED = next(ints) # TODO: implement
+    RAW_LIST = next(ints)
+    RAW_LIST_HISTORY = next(ints)
+    HELP = next(ints)
+    #
+    UPDATE_IDS = next(ints)
 
 def option_token(arg):
     opt2tok = {('-'): Token.PREV,
@@ -66,7 +76,7 @@ def option_token(arg):
                ('-lh', '--list-history'): Token.LIST_HISTORY,
                ('-rl', '--raw-list'): Token.RAW_LIST,
                ('-rh', '--raw-history'): Token.RAW_LIST_HISTORY,
-               ('-h', '--help'): Token.HELP}
+               ('-h', '-u', '--usage'): Token.HELP}
     for names, tok in opt2tok.items():
         if arg in names:
             return tok
@@ -81,109 +91,59 @@ def token(arg):
     # it may as well be an empty string
     return Token.STR
 
-def parse(args):
+def lex(args):
     return map(lambda arg: {'type': token(arg), 'lexem': arg}, args)
 
 # implementation
 
-def branches():    
+def branches():
     retstr = cmd('git', 'for-each-ref', '--format="%(refname:short)"', 'refs/heads/')
     return list(map(lambda ln: ln.strip('"'), retstr.split('\n')))
 
-def read_metadata():
-    try:
-        f = open(augmentations_path, mode='r')
-    except FileNotFoundError:
-        return None, None
-    else:
-        reader = csv.DictReader(f, ['recency', 'branch', 'id', 'annotation', 'status'])
-        metadata = {}
-        maxrecency = -1
-        for row in reader:            
-            recency = int(row['recency'])
-            if recency > maxrecency:
-                maxrecency = recency
-            metadata[row['branch']] = {'recency': recency,
-                                       'id': row['id'],
-                                       'annotation': row['annotation'],
-                                       'status': row['status']}
-        f.close()
-        return metadata, maxrecency
+class Branch:
+    def __init__(self, dictionary):
+        self.__dict__.update(dictionary)
 
-def cmp_to_key(cmp):
-    'Convert a cmp= function into a key= function'
-    class K(object):
-        def __init__(self, obj, *args):
-            self.obj = obj
-        def __lt__(self, other):
-            return cmp(self.obj, other.obj) < 0
-        def __gt__(self, other):
-            return cmp(self.obj, other.obj) > 0
-        def __eq__(self, other):
-            return cmp(self.obj, other.obj) == 0
-        def __le__(self, other):
-            return cmp(self.obj, other.obj) <= 0
-        def __ge__(self, other):
-            return cmp(self.obj, other.obj) >= 0
-        def __ne__(self, other):
-            return cmp(self.obj, other.obj) != 0
-    return K
-
-def cmp_branch_datas(this, other):
-    this_recency = int(this['recency'])
-    other_recency = int(other['recency'])
-    if this_recency < other_recency:
-        return -1
-    elif this_recency > other_recency:
-        return 1
-    elif this_recency == other_recency:
-        this_id = int(this['id'])
-        other_id = int(other['id'])
-        if this_id < other_id:
+    def cmp(self, other):
+        self_recency = int(self.recency)
+        other_recency = int(other.recency)
+        if self_recency < other_recency:
             return -1
-        elif this_id > other_id:
+        elif self_recency > other_recency:
             return 1
-        elif this_id > other_id:
-            raise RuntimeError('Found two identical ids on branch {} and branch {}'
-                               .format(this['branch'], other['branch']))
-
-def sort_by_recency(data):
-    data_list = map(lambda kv: dict(kv[1], branch=kv[0]), data.items())
-    return sorted(data_list, key=cmp_to_key(cmp_branch_datas))
-
-def rewrite(data):
-    with open(augmentations_path, mode='w') as f:
-        writer = csv.writer(f)
-        for b, b_data in data.items():
-            writer.writerow([b_data['recency'], b, b_data['id'], b_data['annotation'], b_data['status']])
-    return data
-
-def fix_difference(difference, data, maxrecency):
-    newrecency = maxrecency + 1
-    for branch in difference:
-        if branch in data.keys():
-            data.pop(branch, None)
         else:
-            data[branch] = {'recency': newrecency,
-                            'id': unique_id(map(lambda key: data[key]['id'], data)),
-                            'annotation': '',
-                            'status': ''}
-    return rewrite(data), newrecency if newrecency is not None else maxrecency
+            self_id = int(self.id)
+            other_id = int(other.id)
+            if self_id < other_id:
+                return -1
+            elif self_id > other_id:
+                return 1
+            else:
+                raise RuntimeError(
+                    'Found two identical ids on branch {} and branch {}'
+                    .format(self.branch, other.branch))
 
-def branch_metadata(branch_list):
-    data, maxrecency = read_metadata()
-    if (data, maxrecency) == (None, None):
-        return rewrite(init_data(branch_list)), 0
-    difference = set(branch_list) ^ set(data.keys())
-    if difference:
-        return fix_difference(difference, data, maxrecency)
-    return data, maxrecency
+    def __lt__(self, other): return self.cmp(other) < 0
+    def __gt__(self, other): return self.cmp(other) > 0
+    def __eq__(self, other): return self.cmp(other) == 0
+    def __le__(self, other): return self.cmp(other) <= 0
+    def __ge__(self, other): return self.cmp(other) >= 0
+    def __ne__(self, other): return self.cmp(other) != 0
 
-def augmented_row_str(branch_data, this_branch):
-    id = branch_data['id']
-    branch = branch_data['branch']
-    annotation = branch_data['annotation']
-    status = branch_data['status']
+def str_integers():
+    for i in integers():
+        yield str(i)
+
+def unique_id(ids):
+    for id in str_integers():
+        if not id in ids:
+            return id
+
+def augmented_branch_str(branch_data, this_branch):
+    id = branch_data.id
+    branch = branch_data.branch
+    annotation = branch_data.annotation
+    status = branch_data.status
     status = '[' + status + ']' if status else ''
     if not annotation and not status:
         row = ' {:<3} {}'.format(id, branch)
@@ -194,38 +154,110 @@ def augmented_row_str(branch_data, this_branch):
     else:
         return ' ' + row
 
-def init_data(branch_list):
-    data = {}
-    for i, branch in enumerate(branch_list):
-        data[branch] = {'recency': 0,
-                        'id': str(i),
-                        'annotation': '',
-                        'status': ''}
-    return data
+class Metadata:
+    path = dot_git + '/git-b-metadata'
+    csv_fields_order = ['branch', 'id', 'recency', 'annotation', 'status']
 
-def str_integers():
-    i = -1
-    while True:
-        i += 1
-        yield str(i)
+    def __init__(self):
+        self.branch_list = branches()
+        self.data = []
+        self.branch2data = {}
+        self.id2data = {}
+        self.maxrecency = -1
+        self.init_metadata()
+        branches_of_data = set(self.branch2data.keys())
+        difference = set(self.branch_list) ^ branches_of_data
+        if difference: self.fix_difference(difference, branches_of_data)
 
-def unique_id(ids):
-    ids_set = set(ids)
-    for id in str_integers():
-        if not id in ids_set:
-            return id
+    def init_metadata(self):
+        "Initializes data, branch2data, id2data and maxrecency fields"
+        try:
+            f = open(Metadata.path, mode='r')
+        except FileNotFoundError:
+            self.create_metadata().rewrite()
+        else:
+            self.read_metadata(f)
+            f.close()
 
-def augment(branch_list):
-    data, maxrecency = branch_metadata(branch_list)
-    this_branch = cur_branch()
-    augmented_list = []
-    for data_obj in sort_by_recency(data):
-        augmented_list.append(augmented_row_str(data_obj, this_branch))
-    return augmented_list, data
+    def create_metadata(self):
+        self.maxrecency = 0
+        common = {'recency': 0, 'annotation': '', 'status': ''}
+        for index, branch in enumerate(self.branch_list):
+            b_data = Branch(dict(common, id=str(index), branch=branch))
+            self.data.append(b_data)
+            self.branch2data[branch] = b_data
+            self.id2data[b_data.id] = b_data
+        return self
+
+    def read_metadata(self, file):
+        reader = csv.DictReader(file, Metadata.csv_fields_order)
+        for row in reader:
+            recency = int(row['recency'])
+            if recency > self.maxrecency:
+                self.maxrecency = recency
+            row['recency'] = recency
+            b_data = Branch(row)
+            self.data.append(b_data)
+            self.branch2data[b_data.branch] = b_data
+            self.id2data[b_data.id] = b_data
+
+    def rewrite(self):
+        with open(Metadata.path, mode='w') as f:
+            writer = csv.DictWriter(f, Metadata.csv_fields_order)
+            for b_data in self.data:
+                writer.writerow(b_data.__dict__)
+
+    def fix_difference(self, difference, branches_of_data):
+        newrecency = self.maxrecency + 1
+        to_delete = []
+        to_add = []
+        for branch in difference:
+            if branch in branches_of_data:
+                to_delete.append(branch)
+            else:
+                to_add.append(branch)
+        if to_delete:
+            for branch in to_delete:
+                b_data = self.branch2data[branch]
+                self.branch2data.pop(b_data.branch, None)
+                self.id2data.pop(b_data.id, None)
+                del self.data[self.data.index(b_data)]
+        if to_add:
+            common = {'recency': newrecency, 'annotation': '', 'status': ''}
+            ids_set = set(map(lambda d: d.id, self.data))
+            for branch in to_add:
+                newid = unique_id(ids_set)
+                ids_set.add(newid)
+                b_data = Branch(dict(common, id=newid, branch=branch))
+                self.data.append(b_data)
+                self.branch2data[branch] = b_data
+        self.rewrite()
+
+    def augment(self, history=None):
+        branches = map(lambda d: d.branch, sorted(self.data)) if history is None else history
+        this_branch = cur_branch()
+        augmented_list = []
+        for branch in branches:
+            try:
+                b_data = self.branch2data[branch]
+            except KeyError:
+                augmented_list.append('  {:<3} {}'.format('-', branch))
+            else:
+                augmented_list.append(
+                    augmented_branch_str(
+                        b_data, this_branch))
+        return augmented_list, self
 
 def kb_interrupt():
     print()
     exit(0)
+
+def prompt(prompt_msg):
+    try:
+        return input(prompt_msg)
+    except KeyboardInterrupt:
+        print()
+        exit(0)
 
 def make_id_a_key(data):
     data_by_id = {}
@@ -235,17 +267,23 @@ def make_id_a_key(data):
                                           'status': data[branch]['status']}
     return data_by_id
 
-def menu(augmented_list_and_data):
-    augmented_list, data = augmented_list_and_data    
-    for line in augmented_list:
-        print(line)
+def menu(augmented_list, metadata):
+    print_str_list(augmented_list)
     try:
-        id = input('> ')
-    except KeyboardInterrupt:
-        kb_interrupt()
-    return make_id_a_key(data)[id]['branch']
+        id = prompt('> ')
+        return metadata.id2data[id].branch
+    except KeyError:
+        error('Bad id: ' + id)
+
+def history_is_empty():
+    error('The history is empty')
 
 def history():
+    # TODO:
+    # * store exit time in history
+    # * store HEAD's hash when exited
+    # * hide nonexistent branches from history
+    # * * option to show these branches
     try:
         f = open(history_path, mode='r')
     except FileNotFoundError:
@@ -285,15 +323,17 @@ def to_id(tok):
     return tok['lexem'][1:]
 
 def branch_from_id(tok):
-    data, _ = branch_metadata(branches())
-    return make_id_a_key(data)[to_id(tok)]['branch']
+    return Metadata().id2data[to_id(tok)].branch
+
+def bad_argument(tok):
+    error('Bad argument: ' + tok['lexem'])
 
 def common_delete_branch(t, tokens, option='-d'):
     # TODO: deleting several branches
     try:
         t = next(tokens)
     except StopIteration:
-        delete_branch_by_name(menu(augment(branches())), option)
+        delete_branch_by_name(menu(*Metadata().augment()), option)
     else:
         if t['type'] == Token.STR:
             delete_branch_by_name(t['lexem'], option)
@@ -301,6 +341,7 @@ def common_delete_branch(t, tokens, option='-d'):
             delete_branch_by_name(branch_from_id(t), option)
         else:
             bad_argument(t)
+    Metadata() # update metadata
 
 # commands
 
@@ -321,46 +362,41 @@ def go_to_prev_branch(t, tokens):
         change_branch(name)
 
 def go_to_branch_by_history(t, tokens):
-    change_branch(menu(augment(history())))
+    change_branch(menu(*Metadata().augment(history())))
 
 def new_branch(t, tokens):
     # TODO: add -n B -a A syntax
     try:
         t = next(tokens)
     except StopIteration:
-        try:
-            name = input('branch name> ')
-        except KeyboardInterrupt:
-            kb_interrupt()
-        else:
-            change_branch(name, minus_b=True)
+        change_branch(prompt('branch name> '), minus_b=True)
     else:
         if t['type'] != Token.STR:
             error('Bad branch name: ' + t['lexem'])
         change_branch(t['lexem'], minus_b=True)
 
 def make_an_annotation(name, annotation):
-    data, _ = branch_metadata(branches())
-    data[name]['annotation'] = annotation
-    rewrite(data)
+    metadata = Metadata()
+    metadata.branch2data[name].annotation = annotation
+    metadata.rewrite()
     exit(0)
 
 def annotate(t, tokens):
     # TODO: figure out a way to make it better
-    # maybe collect all the stuff beforehand
-    # maybe abandon these not so useful cool syntax
+    # * maybe collect all the stuff beforehand
+    # * maybe abandon these not so useful cool syntax
     annotation = []
     try:
         t = next(tokens)
     except StopIteration:
-        make_an_annotation(menu(augment(branches())), input('annotation> '))
-    else:        
+        make_an_annotation(menu(*Metadata().augment()), input('annotation> '))
+    else:
         annotation.append(t['lexem'])
         while True:
             try:
                 t = next(tokens)
             except StopIteration:
-                make_an_annotation(menu(augment(branches())), ' '.join(annotation))
+                make_an_annotation(menu(*Metadata().augment()), ' '.join(annotation))
             else:
                 if t['type'] != Token.STR:
                     break
@@ -389,10 +425,10 @@ def force_delete_branch(t, tokens):
     common_delete_branch(t, tokens, '-D')
 
 def print_augmented_branches(t, tokens):
-    print_str_list(augment(branches())[0])
+    print_str_list(Metadata().augment()[0])
 
 def print_augmented_history(t, tokens):
-    print_str_list(augment(history())[0])
+    print_str_list(Metadata().augment(history())[0])
 
 def print_raw_branch_list(t, tokens):
     print_str_list(branches())
@@ -405,19 +441,19 @@ def print_help(t, tokens):
 
 def git_b(args):
     if not args:
-        change_branch(menu(augment(branches())))
+        change_branch(menu(*Metadata().augment()))
         exit(0)
 
-    tokens = parse(args)
+    tokens = lex(args)
     type2fn = {
-        Token.STR: go_to_branch_by_name,
-        Token.ID: go_to_branch_by_id,
+        Token.STR: go_to_branch_by_name, # composite command
+        Token.ID: go_to_branch_by_id, # composite command
         Token.PREV: go_to_prev_branch,
         Token.HISTORY: go_to_branch_by_history,
-        Token.BRANCH: lambda: error('not implemented'),
-        Token.NEW: new_branch,
-        Token.ANNOTATE: annotate,
-        Token.STATUS: status,
+        Token.BRANCH: lambda: error('not implemented'), # composite command
+        Token.NEW: new_branch, # composite command
+        Token.ANNOTATE: annotate, # composite command
+        Token.STATUS: status, # composite command
         Token.DELETE: delete_branch,
         Token.FORCE_DELETE: force_delete_branch,
         Token.LIST: print_augmented_branches,
