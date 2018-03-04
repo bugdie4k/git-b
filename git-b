@@ -158,6 +158,7 @@ class Metadata:
     csv_fields_order = ['branch', 'id', 'recency', 'annotation', 'status']
 
     def __init__(self):
+        self._initialized = False
         self.branch_list = branches()
         self.data = []
         self.branch2data = {}
@@ -175,6 +176,8 @@ class Metadata:
 
     def ini(self):
         "Initialize fields and fix possible differences"
+        if self._initialized:
+            return self
         try:
             f = open(Metadata.path, mode='r')
         except FileNotFoundError:
@@ -186,6 +189,7 @@ class Metadata:
         difference = set(self.branch_list) ^ branches_from_data
         if difference:
             self.fix_difference(difference, branches_from_data)
+        self._initialized = True
         return self
 
     def create_metadata(self):
@@ -209,6 +213,7 @@ class Metadata:
             self.branch2data[b_data.branch] = b_data
 
     def rewrite(self):
+        # TODO: think about delaying rewrite up to the end
         with open(Metadata.path, mode='w') as f:
             writer = csv.DictWriter(f, Metadata.csv_fields_order)
             for b_data in self.data:
@@ -385,56 +390,60 @@ def go_to_prev_branch(t, tokens):
 def go_to_branch_by_history(t, tokens):
     change_branch(Metadata().menu(history()))
 
-def new_branch(t, tokens):
-    # TODO: add -n B -a A syntax
-    try:
-        t = next(tokens)
-    except StopIteration:
-        change_branch(prompt('branch name> '), minus_b=True)
-    else:
-        if t['type'] != Token.STR:
-            error('Bad branch name: ' + t['lexem'])
-        change_branch(t['lexem'], minus_b=True)
+# def new_branch(t, tokens):
+#     # TODO: add -n B -a A syntax
+#     try:
+#         t = next(tokens)
+#     except StopIteration:
+#         change_branch(prompt('branch name> '), minus_b=True)
+#     else:
+#         if t['type'] != Token.STR:
+#             error('Bad branch name: ' + t['lexem'])
+#         change_branch(t['lexem'], minus_b=True)
 
-def make_an_annotation(name, annotation):
-    metadata = Metadata().ini()
-    metadata.branch2data[name].annotation = annotation
+def annotate(metadata, branch, annotation):
+    metadata.ini()
+    metadata.branch2data[branch].annotation = annotation
     metadata.rewrite()
-    exit(0)
 
-def annotate(t, tokens):
-    # TODO: figure out a way to make it better
-    # * maybe collect all the stuff beforehand
-    # * maybe abandon these not so useful cool syntax
-    annotation = []
-    try:
-        t = next(tokens)
-    except StopIteration:
-        make_an_annotation(Metadata().menu(), input('annotation> '))
-    else:
-        annotation.append(t['lexem'])
-        while True:
-            try:
-                t = next(tokens)
-            except StopIteration:
-                make_an_annotation(Metadata().menu(), ' '.join(annotation))
-            else:
-                if t['type'] != Token.STR:
-                    break
-                else:
-                    annotation.append(t['lexem'])
-        if t['type'] == Token.BRANCH:
-            try:
-                t = next(tokens)
-            except StopIteration:
-                error('Expected a branch name or id after ' + t['lexem'] + ' option')
-            else:
-                if t['type'] == Token.STR:
-                    make_an_annotation(t['lexem'], ' '.join(annotation))
-                elif t['type'] == Token.ID:
-                    make_an_annotation(branch_by_id_tok(t),' '.join(annotation))
-                else:
-                    bad_argument(t)
+def add_status(metadata, branch, status):
+    metadata.ini()
+    metadata.branch2data[branch].status = status
+    metadata.rewrite()
+
+# def annotate(t, tokens):
+#     # TODO: figure out a way to make it better
+#     # * maybe collect all the stuff beforehand
+#     # * maybe abandon these not so useful cool syntax
+#     annotation = []
+#     try:
+#         t = next(tokens)
+#     except StopIteration:
+#         make_an_annotation(Metadata().menu(), input('annotation> '))
+#     else:
+#         annotation.append(t['lexem'])
+#         while True:
+#             try:
+#                 t = next(tokens)
+#             except StopIteration:
+#                 make_an_annotation(Metadata().menu(), ' '.join(annotation))
+#             else:
+#                 if t['type'] != Token.STR:
+#                     break
+#                 else:
+#                     annotation.append(t['lexem'])
+#         if t['type'] == Token.BRANCH:
+#             try:
+#                 t = next(tokens)
+#             except StopIteration:
+#                 error('Expected a branch name or id after ' + t['lexem'] + ' option')
+#             else:
+#                 if t['type'] == Token.STR:
+#                     make_an_annotation(t['lexem'], ' '.join(annotation))
+#                 elif t['type'] == Token.ID:
+#                     make_an_annotation(branch_by_id_tok(t),' '.join(annotation))
+#                 else:
+#                     bad_argument(t)
 
 def status(t, tokens):
     pass
@@ -460,8 +469,86 @@ def print_raw_history(t, tokens):
 def print_help(t, tokens):
     print('IM HELPIN U')
 
-def composite_command(t, tokens, ini):
-    pass
+def take_next(tokens):
+    try:
+        return None, next(tokens)
+    except StopIteration:
+        error('expected an argument after ' + str(t['lexem']))
+
+def take_next_branch(tokens):
+    _, t = take_next(tokens)
+    if t['type'] == Token.STR:
+        return None, t['lexem']
+    elif t['type'] == Token.ID:
+        return None, branch_by_id_tok(t)
+    else:
+        bad_argument(t)
+
+def take_next_new_branch(tokens):
+    _, t = take_next(tokens)
+    if t['type'] == Token.STR:
+        return None, t['lexem']
+    else:
+        bad_argument(t)
+
+def take_upto_non_str(tokens):
+    annotation = ''
+    while True:
+        try:
+            t = next(tokens)
+        except StopIteration:
+            return None, annotation
+        else:
+            if t['type'] == Token.STR or t['type'] == Token.ID:
+                return t, annotation
+            return None, annotation
+
+def collect_info(t, tokens, info):
+    typemap = {
+        Token.BRANCH: ('branch', take_next_branch),
+        Token.NEW: ('new-branch', take_next_new_branch),
+        Token.ANNOTATE: ('annotations', take_upto_non_str),
+        Token.STATUS: ('status', take_upto_non_str)
+    }
+    while True:
+        try:
+            t = next(tokens)
+        except StopIteration:
+            return info
+        else:
+            field, fn = typemap[t['type']]
+            next_t, res = fn(tokens)
+            info[field] = res
+            collect_info(next_t, tokens)
+
+def get_field(dict, field):
+    try:
+        return dict[field]
+    except KeyError:
+        return None
+
+def composite_command(field, take_field):
+    def fn(_, tokens):
+        info = collect_info(None, tokens, { field: take_field(tokens) })
+        branch = get_field(info, 'branch')
+        new_branch = get_field(info, 'new-branch')
+        annotation = get_field(info, 'annotation')
+        status = get_field(info, 'new-branch')
+        if (branch, new_branch) == (True, True):
+            error('Mutually exclusive arguments: --branch and --new-branch')
+        elif (branch, annotation, status) == (True, False, False):
+            go_to_branch_by_name(branch)
+        elif branch:
+            branch_name = branch
+        elif new_branch:
+            branch_name = new_branch
+            change_branch(branch_name, minus_b=True)
+        m = Metadata()
+        if annotation:
+            annotate(m, branch_name, annotation)
+        if status:
+            add_status(m, branch_name, status)
+    return fn
 
 def git_b(args):
     if not args:
@@ -470,14 +557,14 @@ def git_b(args):
 
     tokens = lex(args)
     type2fn = {
-        Token.STR: go_to_branch_by_name, # composite command
-        Token.ID: go_to_branch_by_id, # composite command
+        Token.STR: composite_command('branch', lambda _: t['lexem']), # go_to_branch_by_name,
+        Token.ID: composite_command('branch', lambda _: branch_by_id_tok(t)), # go_to_branch_by_id,
         Token.PREV: go_to_prev_branch,
         Token.HISTORY: go_to_branch_by_history,
-        Token.BRANCH: lambda: error('not implemented'), # composite command
-        Token.NEW: new_branch, # composite command
-        Token.ANNOTATE: annotate, # composite command
-        Token.STATUS: status, # composite command
+        Token.BRANCH: composite_command('branch', take_next_branch), # lambda: error('not implemented'),
+        Token.NEW: composite_command('new-branch', lambda _: t['lexem']), # new_branch,
+        Token.ANNOTATE: composite_command('annotation', take_upto_non_str), # annotate,
+        Token.STATUS: composite_command('status', take_upto_non_str), # status,
         Token.DELETE: delete_branch,
         Token.FORCE_DELETE: force_delete_branch,
         Token.LIST: print_augmented_branches,
