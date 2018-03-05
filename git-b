@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
 
+### Commentary:
+
+# This script is an attempt to make a universal interface for interaction
+# with branches for the most common tasks.
+# + History of branch switching.
+# + Metadata for branches.
+
+# Is it good? I don't know, works for me.
+
+# NOTE: Metadata is local and lives in the project's .git dir.
+# For other solutions to the branch metadata problem see
+#     https://stackoverflow.com/questions/2108405/branch-descriptions-in-git
+
 from sys import argv
 from enum import Enum, unique
 from subprocess import run, PIPE
@@ -200,11 +213,14 @@ class Metadata:
         else:
             self.read_metadata(f)
             f.close()
-        branches_from_data = set(self.branch2data.keys())
-        difference = set(self.branch_list) ^ branches_from_data
-        if difference:
-            self.fix_difference(difference, branches_from_data)
+        self.check_for_difference()
         self._initialized = True
+        return self
+
+    def update(self):
+        self._branch_list = branches()
+        self.ini()
+        self.check_for_difference()
         return self
 
     def create_metadata(self):
@@ -237,6 +253,12 @@ class Metadata:
                 writer = csv.DictWriter(f, Metadata.csv_fields_order)
                 for b_data in self.data:
                     writer.writerow(b_data.__dict__)
+
+    def check_for_difference(self):
+        branches_from_data = set(self.branch2data.keys())
+        difference = set(self.branch_list) ^ branches_from_data
+        if difference:
+            self.fix_difference(difference, branches_from_data)
 
     def fix_difference(self, difference, branches_from_data):
         newrecency = self.maxrecency + 1
@@ -345,6 +367,7 @@ def change_branch(name, minus_b=False):
     original_branch = cur_branch()
     if minus_b:
         cmd('git', 'checkout', '-b', name)
+        M.ini().schedule_rewrite()
     else:
         cmd('git', 'checkout', name)
     with open(M.history_path, mode='a') as f:
@@ -390,7 +413,7 @@ def common_delete_branch(t, tokens, option='-d'):
             pass
         for del_fn in deletions:
             del_fn()
-        M.ini().schedule_rewrite() # update metadata
+    M.update().schedule_rewrite()
 
 ## COMPOSITE COMMAND IMPLEMENTATION
 
@@ -493,7 +516,7 @@ def composite_command(field, take_field):
         if boolify(branch, new_branch) == (True, True):
             error('Mutually exclusive arguments: --branch and --new-branch')
         elif boolify(branch, annotation, status) == (True, False, False):
-            go_to_branch_by_name(branch)
+            change_branch(branch)
             exit(0)
 
         # set branch to work with
@@ -523,9 +546,6 @@ def composite_command(field, take_field):
                 status = prompt('status> ')
             add_status(branch_name, status)
     return fn
-
-def go_to_branch_by_name(t, tokens):
-    change_branch(t.lexem)
 
 def go_to_prev_branch(t, tokens):
     try:
@@ -559,7 +579,26 @@ def print_raw_history(t, tokens):
     print_str_list(history())
 
 def print_help(t, tokens):
-    print('IM HELPIN U')
+    print('''NAME
+      git-b — Interaction with git branches for the most common tasks
+SYNOPSIS
+      git-b [ -
+            | BRANCH
+            | [-d|--delete] BRANCH+
+            | [-D|--force-delete] BRANCH+
+            | [-n|--new] BRANCH_NAME
+            | [-a|--annotate] [ANNOTATION]
+            | [-s|--status] [STATUS]
+            | [-l|--list]
+            | [-li|-lh|--list-history]
+            | [-rl|--raw-list]
+            | [-rh|--raw-history]
+            | [-h|-u|--usage]
+            | COMPOSITE_STATEMENT
+            ]
+DESCRIPTION
+
+''')
 
 ## MAIN
 
