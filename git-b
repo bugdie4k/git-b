@@ -5,6 +5,8 @@ from enum import Enum, unique
 from subprocess import run, PIPE
 import csv
 
+## AUX
+
 def error(msg, code=1):
     print('git-b: ' + msg)
     exit(code)
@@ -23,14 +25,7 @@ def cmd(*cmd_list):
     retstr = res.stdout.decode('utf-8')
     return rem_end_nl(retstr)
 
-# globals
-
-dot_git = cmd('git', 'rev-parse', '--show-toplevel') + '/.git'
-
-history_len = 40
-history_path = dot_git + '/git-b-history'
-
-# lexer
+## LEXER
 
 def integers(start=0):
     i = start - 1
@@ -38,13 +33,15 @@ def integers(start=0):
         i += 1
         yield i
 
-#TODO: rename Token to T
 @unique
-class Token(Enum):
+class T(Enum):
+    "Token types"
+
     __genint = integers(1)
-    #
+
     ID = next(__genint)
     STR = next(__genint)
+
     # options
     PREV = next(__genint)
     HISTORY = next(__genint)
@@ -59,24 +56,32 @@ class Token(Enum):
     RAW_LIST = next(__genint)
     RAW_LIST_HISTORY = next(__genint)
     HELP = next(__genint)
-    #
-    SHOW_DELETED = next(__genint) # TODO: implement
+
+    # TODO: implement
+    SHOW_DELETED = next(__genint)
     UPDATE_IDS = next(__genint)
 
+class Token:
+    def __init__(self, type, lexem):
+        self.type = type
+        self.lexem = lexem
+
 def option_token(arg):
-    opt2tok = {('-'): Token.PREV,
-               ('-i', '--history'): Token.HISTORY,
-               ('-b', '--branch'): Token.BRANCH,
-               ('-n', '--new'): Token.NEW,
-               ('-a', '--annotate'): Token.ANNOTATE,
-               ('-s', '--status'): Token.STATUS,
-               ('-d', '--delete'): Token.DELETE,
-               ('-D', '--force-delete'): Token.FORCE_DELETE,
-               ('-l', '--list'): Token.LIST,
-               ('-lh', '-li', '--list-history'): Token.LIST_HISTORY,
-               ('-rl', '--raw-list'): Token.RAW_LIST,
-               ('-rh', '--raw-history'): Token.RAW_LIST_HISTORY,
-               ('-h', '-u', '--usage'): Token.HELP}
+    opt2tok = {
+        ('-'): T.PREV,
+        ('-i', '--history'): T.HISTORY,
+        ('-b', '--branch'): T.BRANCH,
+        ('-n', '--new'): T.NEW,
+        ('-a', '--annotate'): T.ANNOTATE,
+        ('-s', '--status'): T.STATUS,
+        ('-d', '--delete'): T.DELETE,
+        ('-D', '--force-delete'): T.FORCE_DELETE,
+        ('-l', '--list'): T.LIST,
+        ('-lh', '-li', '--list-history'): T.LIST_HISTORY,
+        ('-rl', '--raw-list'): T.RAW_LIST,
+        ('-rh', '--raw-history'): T.RAW_LIST_HISTORY,
+        ('-h', '-u', '--usage'): T.HELP
+    }
     for names, tok in opt2tok.items():
         if arg in names:
             return tok
@@ -87,18 +92,14 @@ def token(arg):
         if arg[0] == '-':
             return option_token(arg)
         if arg[0] == ':':
-            return Token.ID
+            return T.ID
     # it may as well be an empty string
-    return Token.STR
+    return T.STR
 
 def lex(args):
-    return map(lambda arg: {'type': token(arg), 'lexem': arg}, args)
+    return map(lambda arg: Token(token(arg), arg), args)
 
-# implementation
-
-def branches():
-    retstr = cmd('git', 'for-each-ref', '--format="%(refname:short)"', 'refs/heads/')
-    return list(map(lambda ln: ln.strip('"'), retstr.split('\n')))
+## METADATA
 
 class Branch:
     def __init__(self, dictionary):
@@ -154,27 +155,39 @@ def augmented_branch_str(branch_data, this_branch):
     else:
         return ' ' + row
 
-#TODO: make Metadata global and singleton
+def branches():
+    retstr = cmd('git', 'for-each-ref', '--format="%(refname:short)"', 'refs/heads/')
+    return list(map(lambda ln: ln.strip('"'), retstr.split('\n')))
+
 class Metadata:
+    dot_git = cmd('git', 'rev-parse', '--show-toplevel') + '/.git'
+
+    history_len = 40
+    history_path = dot_git + '/git-b-history'
+
     path = dot_git + '/git-b-metadata'
     csv_fields_order = ['branch', 'id', 'recency', 'annotation', 'status']
 
     def __init__(self):
         self._initialized = False
-        self.branch_list = branches()
+        self._branch_list = None
+        self._rewrite_scheduled = False
+        self._id2data = None
         self.data = []
         self.branch2data = {}
-        self._id2data = {}
         self.maxrecency = -1
 
     @property
+    def branch_list(self):
+        if not self._branch_list:
+            self._branch_list = branches()
+        return self._branch_list
+
+    @property
     def id2data(self):
-        if self._id2data:
-            return self._id2data
-        else:
-            self._id2data = dict(zip(map(lambda b: b.id, self.data),
-                                     self.data))
-            return self._id2data
+        if not self._id2data:
+            self._id2data = { b.id: b for b in self.data }
+        return self._id2data
 
     def ini(self):
         "Initialize fields and fix possible differences"
@@ -214,12 +227,16 @@ class Metadata:
             self.data.append(b_data)
             self.branch2data[b_data.branch] = b_data
 
+    def schedule_rewrite(self):
+        self._rewrite_scheduled = True
+
     def rewrite(self):
-        # TODO: think about delaying rewrite up to the end
-        with open(Metadata.path, mode='w') as f:
-            writer = csv.DictWriter(f, Metadata.csv_fields_order)
-            for b_data in self.data:
-                writer.writerow(b_data.__dict__)
+        if self._rewrite_scheduled:
+            assert self._initialized and self.data
+            with open(Metadata.path, mode='w') as f:
+                writer = csv.DictWriter(f, Metadata.csv_fields_order)
+                for b_data in self.data:
+                    writer.writerow(b_data.__dict__)
 
     def fix_difference(self, difference, branches_from_data):
         newrecency = self.maxrecency + 1
@@ -244,7 +261,7 @@ class Metadata:
                 b_data = Branch(dict(common, id=newid, branch=branch))
                 self.data.append(b_data)
                 self.branch2data[branch] = b_data
-        self.rewrite()
+        self.schedule_rewrite()
 
     def augment(self, branches_to_augment=None):
         if branches_to_augment is None:
@@ -272,6 +289,10 @@ class Metadata:
             return self.id2data[id].branch
         except KeyError:
             error('Bad id: ' + id)
+
+M = Metadata() # global metadata singleton
+
+## IMPLEMENTATION
 
 def kb_interrupt():
     print()
@@ -302,7 +323,7 @@ def history():
     # * hide nonexistent branches from history
     # * * option to show these branches
     try:
-        f = open(history_path, mode='r')
+        f = open(M.history_path, mode='r')
     except FileNotFoundError:
         history_is_empty()
     else:
@@ -314,11 +335,11 @@ def cur_branch():
     return cmd('git', 'rev-parse', '--abbrev-ref', 'HEAD')
 
 def cut_history():
-    with open(history_path, mode='r+') as f:
+    with open(M.history_path, mode='r+') as f:
         lines = list(f)
-        if len(lines) > history_len:
+        if len(lines) > M.history_len:
             f.truncate(0)
-            f.writelines(lines[-history_len:])
+            f.writelines(lines[-M.history_len:])
 
 def change_branch(name, minus_b=False):
     original_branch = cur_branch()
@@ -326,7 +347,7 @@ def change_branch(name, minus_b=False):
         cmd('git', 'checkout', '-b', name)
     else:
         cmd('git', 'checkout', name)
-    with open(history_path, mode='a') as f:
+    with open(M.history_path, mode='a') as f:
         f.write(original_branch + '\n')
     cut_history()
 
@@ -338,13 +359,13 @@ def delete_branch_by_name(name, option='-d'):
     print(delete_report)
 
 def to_id(tok):
-    return tok['lexem'][1:]
+    return tok.lexem[1:]
 
 def branch_by_id_tok(tok):
-    return Metadata().ini().id2data[to_id(tok)].branch
+    return M.ini().id2data[to_id(tok)].branch
 
 def bad_argument(tok):
-    error('Bad argument: ' + tok['lexem'])
+    error('Bad argument: ' + tok.lexem)
 
 def common_delete_branch(t, tokens, option='-d'):
     deletions = []
@@ -354,22 +375,24 @@ def common_delete_branch(t, tokens, option='-d'):
         except StopIteration:
             return False
         else:
-            if t['type'] == Token.STR:
-                del_fn = lambda: delete_branch_by_name(t['lexem'], option)
-            elif t['type'] == Token.ID:
+            if t.type == T.STR:
+                del_fn = lambda: delete_branch_by_name(t.lexem, option)
+            elif t.type == T.ID:
                 del_fn = lambda: delete_branch_by_name(branch_by_id_tok(t), option)
             else:
                 bad_argument(t)
             deletions.append(del_fn)
             return True
     if not take1():
-        delete_branch_by_name(Metadata().menu(), option)
+        delete_branch_by_name(M.menu(), option)
     else:
         while take1():
             pass
         for del_fn in deletions:
             del_fn()
-        Metadata().ini() # update metadata
+        M.ini().schedule_rewrite() # update metadata
+
+## COMPOSITE COMMAND IMPLEMENTATION
 
 def take_next_branch(tokens):
     try:
@@ -377,9 +400,9 @@ def take_next_branch(tokens):
     except StopIteration:
         return True, None
     else:
-        if t['type'] == Token.STR:
-            return t['lexem'], None
-        elif t['type'] == Token.ID:
+        if t.type == T.STR:
+            return t.lexem, None
+        elif t.type == T.ID:
             return branch_by_id_tok(t), None
         else:
             return True, t
@@ -390,8 +413,8 @@ def take_next_new_branch(tokens):
     except StopIteration:
         return True, None
     else:
-        if t['type'] == Token.STR:
-            return t['lexem'], None
+        if t.type == T.STR:
+            return t.lexem, None
         else:
             return None, t
 
@@ -404,17 +427,17 @@ def take_upto_non_str(tokens):
         except StopIteration:
             return getres(), None
         else:
-            if t['type'] == Token.STR or t['type'] == Token.ID:
-                annotation.append(t['lexem'])
+            if t.type == T.STR or t.type == T.ID:
+                annotation.append(t.lexem)
             else:
                 return getres(), t
 
 def parse_composite_command(t, tokens, info):
     typemap = {
-        Token.BRANCH: ('branch', take_next_branch),
-        Token.NEW: ('new-branch', take_next_new_branch),
-        Token.ANNOTATE: ('annotations', take_upto_non_str),
-        Token.STATUS: ('status', take_upto_non_str)
+        T.BRANCH: ('branch', take_next_branch),
+        T.NEW: ('new-branch', take_next_new_branch),
+        T.ANNOTATE: ('annotation', take_upto_non_str),
+        T.STATUS: ('status', take_upto_non_str)
     }
     next_t = t
     while True:
@@ -426,78 +449,87 @@ def parse_composite_command(t, tokens, info):
                 t = next(tokens)
             except StopIteration:
                 return info
-        field, fn = typemap[t['type']]
+        field, fn = typemap[t.type]
         value, next_t = fn(tokens)
         info[field] = value
 
-def get_field(dict, field):
+def get(dict, field):
     try:
         return dict[field]
     except KeyError:
         return None
+
+def destruct(info):
+    return get(info, 'branch'), get(info, 'new-branch'), \
+           get(info, 'annotation'), get(info, 'status')
 
 def my_bool(arg):
     if arg == '':
         return True
     return bool(arg)
 
-# commands
+def boolify(*args):
+    return tuple( my_bool(arg) for arg in args )
 
-def annotate(metadata, branch, annotation):
-    metadata.ini()
-    metadata.branch2data[branch].annotation = annotation
-    metadata.rewrite()
+def annotate(branch, annotation):
+    M.ini()
+    M.branch2data[branch].annotation = annotation
+    M.schedule_rewrite()
 
-def add_status(metadata, branch, status):
-    metadata.ini()
-    metadata.branch2data[branch].status = status
-    metadata.rewrite()
+def add_status(branch, status):
+    M.ini()
+    M.branch2data[branch].status = status
+    M.schedule_rewrite()
 
-# TODO: clean up
+## COMMANDS
+
 def composite_command(field, take_field):
     def fn(_, tokens):
         value, next_t = take_field(tokens)
         info = parse_composite_command(next_t, tokens, { field: value })
-        branch = get_field(info, 'branch')
-        new_branch = get_field(info, 'new-branch')
-        annotation = get_field(info, 'annotation')
-        status = get_field(info, 'status')
-        boolify = lambda *args: tuple( my_bool(arg) for arg in args )
-        m = Metadata()
-        branch_name = None
+        branch, new_branch, annotation, status = destruct(info)
+
+        # cut off edge cases
         if boolify(branch, new_branch) == (True, True):
             error('Mutually exclusive arguments: --branch and --new-branch')
         elif boolify(branch, annotation, status) == (True, False, False):
             go_to_branch_by_name(branch)
+            exit(0)
+
+        # set branch to work with
+        branch_name = None
+        if branch == True:
+            branch_name = M.menu()
         elif branch:
-            if branch == True:
-                branch_name = m.menu()
-            else:
-                branch_name = branch
+            branch_name = branch
+            print('branch> ', branch_name)
+        elif new_branch == True:
+            branch_name = M.menu()
         elif new_branch:
-            if new_branch == True:
-                branch_name = m.menu()
-            else:
-                branch_name = new_branch
+            branch_name = new_branch
             change_branch(branch_name, minus_b=True)
-        if not branch_name and (my_bool(annotation) or my_bool(status)):
-            branch_name = m.menu()
-        if my_bool(annotation):
+        bool_annotation = my_bool(annotation)
+        bool_status = my_bool(status)
+        if (bool_annotation or bool_status) and not branch_name:
+            branch_name = M.menu()
+
+        # add annnotation and status
+        if bool_annotation:
             if annotation == True:
-                annotation = input('annotation> ')
-            annotate(m, branch_name, annotation)
-        if my_bool(status):
+                annotation = prompt('annotation> ')
+            annotate(branch_name, annotation)
+        if bool_status:
             if status == True:
-                status = input('status> ')
-            add_status(m, branch_name, status)
+                status = prompt('status> ')
+            add_status(branch_name, status)
     return fn
 
 def go_to_branch_by_name(t, tokens):
-    change_branch(t['lexem'])
+    change_branch(t.lexem)
 
 def go_to_prev_branch(t, tokens):
     try:
-        f = open(history_path, mode='r')
+        f = open(M.history_path, mode='r')
     except FileNotFoundError:
         history_is_empty()
     else:
@@ -506,7 +538,7 @@ def go_to_prev_branch(t, tokens):
         change_branch(name)
 
 def go_to_branch_by_history(t, tokens):
-    change_branch(Metadata().menu(history()))
+    change_branch(M.menu(history()))
 
 def delete_branch(t, tokens):
     common_delete_branch(t, tokens, '-d')
@@ -515,10 +547,10 @@ def force_delete_branch(t, tokens):
     common_delete_branch(t, tokens, '-D')
 
 def print_augmented_branches(t, tokens):
-    print_str_list(Metadata().ini().augment())
+    print_str_list(M.ini().augment())
 
 def print_augmented_history(t, tokens):
-    print_str_list(Metadata().ini().augment(history()))
+    print_str_list(M.ini().augment(history()))
 
 def print_raw_branch_list(t, tokens):
     print_str_list(branches())
@@ -529,36 +561,41 @@ def print_raw_history(t, tokens):
 def print_help(t, tokens):
     print('IM HELPIN U')
 
-def git_b(args):
-    if not args:
-        change_branch(Metadata().menu())
-        exit(0)
+## MAIN
 
+def execute_command(args):
     tokens = lex(args)
     type2fn = {
-        Token.STR: composite_command('branch', lambda _: (t['lexem'], None)), # go_to_branch_by_name,
-        Token.ID: composite_command('branch', lambda _: (branch_by_id_tok(t), None)), # go_to_branch_by_id,
-        Token.PREV: go_to_prev_branch,
-        Token.HISTORY: go_to_branch_by_history,
-        Token.BRANCH: composite_command('branch', take_next_branch), # lambda: error('not implemented'),
-        Token.NEW: composite_command('new-branch', take_next_new_branch), # new_branch,
-        Token.ANNOTATE: composite_command('annotation', take_upto_non_str), # annotate,
-        Token.STATUS: composite_command('status', take_upto_non_str), # status,
-        Token.DELETE: delete_branch,
-        Token.FORCE_DELETE: force_delete_branch,
-        Token.LIST: print_augmented_branches,
-        Token.LIST_HISTORY: print_augmented_history,
-        Token.RAW_LIST: print_raw_branch_list,
-        Token.RAW_LIST_HISTORY: print_raw_history,
-        Token.HELP: print_help
+        T.STR: composite_command('branch', lambda _: (t.lexem, None)),
+        T.ID: composite_command('branch', lambda _: (branch_by_id_tok(t), None)),
+        T.PREV: go_to_prev_branch,
+        T.HISTORY: go_to_branch_by_history,
+        T.BRANCH: composite_command('branch', take_next_branch),
+        T.NEW: composite_command('new-branch', take_next_new_branch),
+        T.ANNOTATE: composite_command('annotation', take_upto_non_str),
+        T.STATUS: composite_command('status', take_upto_non_str),
+        T.DELETE: delete_branch,
+        T.FORCE_DELETE: force_delete_branch,
+        T.LIST: print_augmented_branches,
+        T.LIST_HISTORY: print_augmented_history,
+        T.RAW_LIST: print_raw_branch_list,
+        T.RAW_LIST_HISTORY: print_raw_history,
+        T.HELP: print_help
     }
     try:
         t = next(tokens)
-        command_fn = type2fn[t['type']]
+        command_fn = type2fn[t.type]
     except KeyError:
         bad_argument(t)
     else:
         command_fn(t, tokens)
+
+def git_b(args):
+    if not args:
+        change_branch(M.menu())
+        exit(0)
+    execute_command(args)
+    M.rewrite()
 
 if __name__ == '__main__':
     git_b(argv[1:])
