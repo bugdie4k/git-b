@@ -578,25 +578,59 @@ def print_raw_branch_list(t, tokens):
 def print_raw_history(t, tokens):
     print_str_list(history())
 
+# TODO: make a separate manpage. this will enable git-help command
 def print_help(t, tokens):
     print('''NAME
       git-b — Interaction with git branches for the most common tasks
+
 SYNOPSIS
-      git-b [ -
-            | BRANCH
-            | [-d|--delete] BRANCH+
-            | [-D|--force-delete] BRANCH+
-            | [-n|--new] BRANCH_NAME
-            | [-a|--annotate] [ANNOTATION]
-            | [-s|--status] [STATUS]
-            | [-l|--list]
-            | [-li|-lh|--list-history]
-            | [-rl|--raw-list]
-            | [-rh|--raw-history]
-            | [-h|-u|--usage]
-            | COMPOSITE_STATEMENT
-            ]
-DESCRIPTION
+      git-b [ <single entry statement> | <composite statement> ]
+
+STATEMENTS
+  <single entry statement>
+      -
+          Go to previous branch in history.
+          Git: git checkout *previous branch*
+
+      BRANCH
+          Go to BRANCH. BRANCH is a BRANCH_NAME or BRANCH_ID.
+          Git: git checkout BRANCH
+
+      -d|--delete BRANCH*
+          Delete one or more branches.
+          Git: git branch -d BRANCH # maybe several times
+
+      -D|--force-delete BRANCH*
+          Force delete one or more branches.
+          Git: git branch -D BRANCH # maybe several times
+
+      -n|--new-branch BRANCH_NAME?
+          Create new branch and go to it.
+          Git: git checkout -b BRANCH_NAME'
+
+      -a|--annotate STR*
+          Add an annotation to a branch you'd choose from a menu.
+
+      -s|--status STR*
+          Add a status to a branch you'd choose from a menu.
+
+      -l|--list
+          Print branch list augmented with metadata.
+
+      -li|-lh|--list-history
+          Print history list augmented with metadata.
+
+      -rl|--raw-list
+          Print raw branch list.
+          Git: git for-each-ref --format="%(refname:short)" refs/heads/
+
+      -rh|--raw-history
+          Print raw history list.
+
+      -h|--help|-u|--usage
+          Print this help message.
+
+  <composite statement>
 
 ''')
 
