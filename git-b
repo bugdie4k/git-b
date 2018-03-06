@@ -17,6 +17,7 @@ from sys import argv
 from enum import Enum, unique
 from subprocess import run, PIPE
 import csv
+import readline
 
 ## AUX
 
@@ -72,7 +73,7 @@ class T(Enum):
 
     # TODO: implement
     SHOW_DELETED = next(__genint)
-    UPDATE_IDS = next(__genint)
+    SET_ID = next(__genint)
 
 class Token:
     def __init__(self, type, lexem):
@@ -92,8 +93,9 @@ def option_token(arg):
         ('-l', '--list'): T.LIST,
         ('-lh', '-li', '--list-history'): T.LIST_HISTORY,
         ('-rl', '--raw-list'): T.RAW_LIST,
-        ('-rh', '--raw-history'): T.RAW_LIST_HISTORY,
-        ('-h', '-u', '--usage'): T.HELP
+        ('-rh', '-ri', '--raw-history'): T.RAW_LIST_HISTORY,
+        ('-h', '-u', '--usage'): T.HELP,
+        ('--id', '--set-id'): T.SET_ID
     }
     for names, tok in opt2tok.items():
         if arg in names:
@@ -158,11 +160,11 @@ def augmented_branch_str(branch_data, this_branch):
     branch = branch_data.branch
     annotation = branch_data.annotation
     status = branch_data.status
-    status = '[' + status + ']' if status else ''
+    status = '[' + status + '] ' if status else ''
     if not annotation and not status:
         row = ' {:<3} {}'.format(id, branch)
     else:
-        row = ' {:<3} {:<40} {:<3} {} {}'.format(id, branch, id, status, annotation)
+        row = ' {:<3} {:<50} {:<3} {}{}'.format(id, branch, id, status, annotation)
     if branch == this_branch:
         return '*' + row
     else:
@@ -227,11 +229,12 @@ class Metadata:
         self.maxrecency = 0
         common = {'recency': 0, 'annotation': '', 'status': ''}
         zero_id_branches = ('master', 'trunk')
-        for index, branch in enumerate(self.branch_list):
+        ints = integers(1)
+        for i, branch in enumerate(self.branch_list):
             if branch in zero_id_branches:
                 id = 0
             else:
-                id = index + 1
+                id = next(ints)
             b_data = Branch(dict(common, id=str(id), branch=branch))
             self.data.append(b_data)
             self.branch2data[branch] = b_data
@@ -390,7 +393,14 @@ def to_id(tok):
     return tok.lexem[1:]
 
 def branch_by_id_tok(tok):
-    return M.ini().id2data[to_id(tok)].branch
+    i2d =  M.ini().id2data
+    id = to_id(tok)
+    try:
+        b = i2d[id]
+    except KeyError:
+        error('Bad id: ' + id)
+    else:
+        return b.branch
 
 def bad_argument(tok):
     error('Bad argument: ' + tok.lexem)
@@ -422,31 +432,40 @@ def common_delete_branch(t, tokens, option='-d'):
 
 ## COMPOSITE COMMAND IMPLEMENTATION
 
-def take_next_branch(tokens):
-    try:
-        t = next(tokens)
-    except StopIteration:
-        return True, None
+def took_branch(t):
+    if t.type == T.STR:
+        return t.lexem, None
+    elif t.type == T.ID:
+        return branch_by_id_tok(t), None
     else:
-        if t.type == T.STR:
-            return t.lexem, None
-        elif t.type == T.ID:
-            return branch_by_id_tok(t), None
-        else:
-            return True, t
+        return True, t
 
-def take_next_new_branch(tokens):
-    try:
-        t = next(tokens)
-    except StopIteration:
-        return True, None
+def took_new_branch(t):
+    if t.type == T.STR:
+        return t.lexem, None
     else:
-        if t.type == T.STR:
-            return t.lexem, None
-        else:
-            return None, t
+        return True, t
 
-def take_upto_non_str(tokens):
+def took_id(t):
+    if t.type == T.STR:
+        try:
+            return int(t.lexem), None
+        except ValueError:
+            error('Id should be an integer')
+    else:
+        return True, t
+
+def take_next(when_taken):
+    def taker_fn(tokens):
+        try:
+            t = next(tokens)
+        except StopIteration:
+            return True, None
+        else:
+            return when_taken(t)
+    return taker_fn
+
+def take_upto_option(tokens):
     annotation = []
     getres = lambda: ' '.join(annotation) if annotation else True
     while True:
@@ -460,12 +479,13 @@ def take_upto_non_str(tokens):
             else:
                 return getres(), t
 
-def parse_composite_command(t, tokens, info):
+def parse_composite_command(t, tokens, pinfo):
     typemap = {
-        T.BRANCH: ('branch', take_next_branch),
-        T.NEW: ('new-branch', take_next_new_branch),
-        T.ANNOTATE: ('annotation', take_upto_non_str),
-        T.STATUS: ('status', take_upto_non_str)
+        T.BRANCH: ('branch', take_next(took_branch)),
+        T.NEW: ('new-branch', take_next(took_new_branch)),
+        T.ANNOTATE: ('annotation', take_upto_option),
+        T.STATUS: ('status', take_upto_option),
+        T.SET_ID: ('id', take_next(took_id))
     }
     next_t = t
     while True:
@@ -476,10 +496,10 @@ def parse_composite_command(t, tokens, info):
             try:
                 t = next(tokens)
             except StopIteration:
-                return info
+                return pinfo
         field, fn = typemap[t.type]
         value, next_t = fn(tokens)
-        info[field] = value
+        pinfo[field] = value
 
 def get(dict, field):
     try:
@@ -487,12 +507,15 @@ def get(dict, field):
     except KeyError:
         return None
 
-def destruct(info):
-    return get(info, 'branch'), get(info, 'new-branch'), \
-           get(info, 'annotation'), get(info, 'status')
+def destruct_parsing_info(pinfo):
+    return get(pinfo, 'branch'), get(pinfo, 'new-branch'), \
+           get(pinfo, 'annotation'), get(pinfo, 'status'), \
+           get(pinfo, 'id')
 
 def my_bool(arg):
     if arg == '':
+        return True
+    if arg == 0:
         return True
     return bool(arg)
 
@@ -509,18 +532,29 @@ def add_status(branch, status):
     M.branch2data[branch].status = status
     M.schedule_rewrite()
 
+def set_id(branch, id):
+    M.ini()
+    b = M.branch2data[branch]
+    if int(b.id) == id:
+        error('Branch ' + branch + ' already has id ' + str(id))
+    str_id = str(id)
+    if str_id in M.id2data.keys():
+        error('There is already a branch with ' + str_id + ' id: ' + M.id2data[str_id].branch)
+    b.id = id
+    M.schedule_rewrite()
+
 ## COMMANDS
 
 def composite_command(field, take_field):
     def fn(_, tokens):
         value, next_t = take_field(tokens)
-        info = parse_composite_command(next_t, tokens, { field: value })
-        branch, new_branch, annotation, status = destruct(info)
+        pinfo = parse_composite_command(next_t, tokens, { field: value })
+        branch, new_branch, annotation, status, id = destruct_parsing_info(pinfo)
 
         # cut off edge cases
         if boolify(branch, new_branch) == (True, True):
             error('Mutually exclusive arguments: --branch and --new-branch')
-        elif boolify(branch, annotation, status) == (True, False, False):
+        elif boolify(branch, annotation, status, id) == (True, False, False, False):
             change_branch(branch)
             exit(0)
 
@@ -541,7 +575,8 @@ def composite_command(field, take_field):
 
         bool_annotation = my_bool(annotation)
         bool_status = my_bool(status)
-        if (bool_annotation or bool_status) and not branch_name:
+        bool_id = my_bool(id)
+        if (bool_annotation or bool_status or bool_id) and not branch_name:
             branch_name = M.menu()
 
         # add annnotation and status
@@ -553,8 +588,12 @@ def composite_command(field, take_field):
             if status == True:
                 status = prompt('status> ')
             add_status(branch_name, status)
+        if bool_id:
+            if id == True and id != 1:
+                id = prompt('id> ')
+            set_id(branch_name, id)
 
-        if (bool_annotation or bool_status):
+        if (bool_annotation or bool_status or bool_id):
             print_str_list(M.augment([branch_name]))
     return fn
 
@@ -589,7 +628,8 @@ def print_raw_branch_list(t, tokens):
 def print_raw_history(t, tokens):
     print_str_list(history())
 
-# TODO: make a separate manpage. this will enable git-help command
+# TODO: make a separate manpage.
+# installed manpage will also enable git-help command
 def print_help(t, tokens):
     print('''NAME
       git-b — Interaction with git branches for the most common tasks
@@ -654,17 +694,18 @@ def execute_command(args):
         T.ID: composite_command('branch', lambda _: (branch_by_id_tok(t), None)),
         T.PREV: go_to_prev_branch,
         T.HISTORY: go_to_branch_by_history,
-        T.BRANCH: composite_command('branch', take_next_branch),
-        T.NEW: composite_command('new-branch', take_next_new_branch),
-        T.ANNOTATE: composite_command('annotation', take_upto_non_str),
-        T.STATUS: composite_command('status', take_upto_non_str),
+        T.BRANCH: composite_command('branch', take_next(took_branch)),
+        T.NEW: composite_command('new-branch', take_next(took_new_branch)),
+        T.ANNOTATE: composite_command('annotation', take_upto_option),
+        T.STATUS: composite_command('status', take_upto_option),
         T.DELETE: delete_branch,
         T.FORCE_DELETE: force_delete_branch,
         T.LIST: print_augmented_branches,
         T.LIST_HISTORY: print_augmented_history,
         T.RAW_LIST: print_raw_branch_list,
         T.RAW_LIST_HISTORY: print_raw_history,
-        T.HELP: print_help
+        T.HELP: print_help,
+        T.SET_ID: composite_command('id', take_next(took_id))
     }
     try:
         t = next(tokens)
