@@ -162,7 +162,7 @@ def augmented_branch_str(branch_data, this_branch):
     if not annotation and not status:
         row = ' {:<3} {}'.format(id, branch)
     else:
-        row = ' {:<3} {:<20} {:<3} {} {}'.format(id, branch, id, status, annotation)
+        row = ' {:<3} {:<40} {:<3} {} {}'.format(id, branch, id, status, annotation)
     if branch == this_branch:
         return '*' + row
     else:
@@ -226,8 +226,13 @@ class Metadata:
     def create_metadata(self):
         self.maxrecency = 0
         common = {'recency': 0, 'annotation': '', 'status': ''}
+        zero_id_branches = ('master', 'trunk')
         for index, branch in enumerate(self.branch_list):
-            b_data = Branch(dict(common, id=str(index), branch=branch))
+            if branch in zero_id_branches:
+                id = 0
+            else:
+                id = index + 1
+            b_data = Branch(dict(common, id=str(id), branch=branch))
             self.data.append(b_data)
             self.branch2data[branch] = b_data
         return self
@@ -521,16 +526,19 @@ def composite_command(field, take_field):
 
         # set branch to work with
         branch_name = None
-        if branch == True:
-            branch_name = M.menu()
-        elif branch:
-            branch_name = branch
-            print('branch> ', branch_name)
-        elif new_branch == True:
-            branch_name = M.menu()
+        if branch:
+            if branch == True:
+                branch_name = M.menu()
+                print('branch> ', branch_name)
+            else:
+                branch_name = branch
         elif new_branch:
-            branch_name = new_branch
+            if new_branch == True:
+                branch_name = prompt('new branch> ')
+            else:
+                branch_name = new_branch
             change_branch(branch_name, minus_b=True)
+
         bool_annotation = my_bool(annotation)
         bool_status = my_bool(status)
         if (bool_annotation or bool_status) and not branch_name:
@@ -545,6 +553,9 @@ def composite_command(field, take_field):
             if status == True:
                 status = prompt('status> ')
             add_status(branch_name, status)
+
+        if (bool_annotation or bool_status):
+            print_str_list(M.augment([branch_name]))
     return fn
 
 def go_to_prev_branch(t, tokens):
