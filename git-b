@@ -31,9 +31,9 @@ def rem_end_nl(s):
 def cmd(*cmd_list):
     res = run(cmd_list, stdout=PIPE)
     if res.returncode != 0:
-        error("\n  The command:\n      " \
+        error('\n  The command:\n      ' \
               + ' '.join(cmd_list) \
-              + "\n  exited with code:\n      " \
+              + '\n  exited with code:\n      ' \
               + str(res.returncode))
         exit(res.returncode)
     retstr = res.stdout.decode('utf-8')
@@ -70,10 +70,8 @@ class T(Enum):
     RAW_LIST = next(__genint)
     RAW_LIST_HISTORY = next(__genint)
     HELP = next(__genint)
-
-    # TODO: implement
-    SHOW_DELETED = next(__genint)
     SET_ID = next(__genint)
+    SHOW_DELETED = next(__genint)
 
 class Token:
     def __init__(self, type, lexem):
@@ -95,7 +93,8 @@ def option_token(arg):
         ('-rl', '--raw-list'): T.RAW_LIST,
         ('-rh', '-ri', '--raw-history'): T.RAW_LIST_HISTORY,
         ('-h', '-u', '--usage'): T.HELP,
-        ('--id', '--set-id'): T.SET_ID
+        ('--id', '--set-id'): T.SET_ID,
+        ('--show-deleted',): T.SHOW_DELETED
     }
     for names, tok in opt2tok.items():
         if arg in names:
@@ -117,8 +116,12 @@ def lex(args):
 ## METADATA
 
 class Branch:
-    def __init__(self, dictionary):
-        self.__dict__.update(dictionary)
+    def __init__(self, branch, id, recency, annotation, status):
+        self.branch = branch
+        self.id = id
+        self.recency = recency
+        self.annotation = annotation
+        self.status = status
 
     def cmp(self, other):
         self_recency = int(self.recency)
@@ -235,7 +238,7 @@ class Metadata:
                 id = 0
             else:
                 id = next(ints)
-            b_data = Branch(dict(common, id=str(id), branch=branch))
+            b_data = Branch(**dict(common, id=str(id), branch=branch))
             self.data.append(b_data)
             self.branch2data[branch] = b_data
         return self
@@ -247,7 +250,7 @@ class Metadata:
             if recency > self.maxrecency:
                 self.maxrecency = recency
             row['recency'] = recency
-            b_data = Branch(row)
+            b_data = Branch(**row)
             self.data.append(b_data)
             self.branch2data[b_data.branch] = b_data
 
@@ -288,12 +291,12 @@ class Metadata:
             for branch in to_add:
                 newid = unique_id(ids_set)
                 ids_set.add(newid)
-                b_data = Branch(dict(common, id=newid, branch=branch))
+                b_data = Branch(**dict(common, id=newid, branch=branch))
                 self.data.append(b_data)
                 self.branch2data[branch] = b_data
         self.schedule_rewrite()
 
-    def augment(self, branches_to_augment=None):
+    def augment(self, branches_to_augment=None, show_deleted=False):
         if branches_to_augment is None:
             branches = map(lambda d: d.branch, sorted(self.data))
         else:
@@ -304,16 +307,17 @@ class Metadata:
             try:
                 b_data = self.branch2data[branch]
             except KeyError:
-                augmented_list.append('  {:<3} {}'.format('-', branch))
+                if show_deleted:
+                    augmented_list.append('  {:<3} {}'.format('-', branch))
             else:
                 augmented_list.append(
                     augmented_branch_str(
                         b_data, this_branch))
         return augmented_list
 
-    def menu(self, branches_to_augment=None):
+    def menu(self, branches_to_augment=None, show_deleted=False):
         self.ini()
-        print_str_list(self.augment(branches_to_augment))
+        print_str_list(self.augment(branches_to_augment, show_deleted))
         try:
             id = prompt('> ')
             return self.id2data[id].branch
@@ -347,11 +351,9 @@ def history_is_empty():
     error('The history is empty')
 
 def history():
-    # TODO:
+    # TODO: (maybe, it's not that useful)
     # * store exit time in history
     # * store HEAD's hash when exited
-    # * hide nonexistent branches from history
-    # * * option to show these branches
     try:
         f = open(M.history_path, mode='r')
     except FileNotFoundError:
@@ -429,6 +431,16 @@ def common_delete_branch(t, tokens, option='-d'):
         for del_fn in deletions:
             del_fn()
     M.update().schedule_rewrite()
+
+def read_show_deleted(tokens):
+    try:
+        t = next(tokens)
+    except StopIteration:
+        return False
+    else:
+        if t.type == T.SHOW_DELETED:
+            return True
+        return False
 
 ## COMPOSITE COMMAND IMPLEMENTATION
 
@@ -608,7 +620,8 @@ def go_to_prev_branch(t, tokens):
         change_branch(name)
 
 def go_to_branch_by_history(t, tokens):
-    change_branch(M.menu(history()))
+    show_deleted = read_show_deleted(tokens)
+    change_branch(M.menu(history(), show_deleted))
 
 def delete_branch(t, tokens):
     common_delete_branch(t, tokens, '-d')
@@ -620,7 +633,8 @@ def print_augmented_branches(t, tokens):
     print_str_list(M.ini().augment())
 
 def print_augmented_history(t, tokens):
-    print_str_list(M.ini().augment(history()))
+    show_deleted = read_show_deleted(tokens)
+    print_str_list(M.ini().augment(history(), show_deleted))
 
 def print_raw_branch_list(t, tokens):
     print_str_list(branches())
@@ -681,6 +695,12 @@ STATEMENTS
       -h|--help|-u|--usage
           Print this help message.
 
+      --id|--set-id
+          Set id of a branch
+
+      --show-deleted
+          Shows deleted branches in history. Works with --history and --list-history
+
   <composite statement>
 
 ''')
@@ -705,7 +725,8 @@ def execute_command(args):
         T.RAW_LIST: print_raw_branch_list,
         T.RAW_LIST_HISTORY: print_raw_history,
         T.HELP: print_help,
-        T.SET_ID: composite_command('id', take_next(took_id))
+        T.SET_ID: composite_command('id', take_next(took_id)),
+        T.SHOW_DELETED: lambda _, __: error('--show-deleted can only follow --history or --list-history options')
     }
     try:
         t = next(tokens)
