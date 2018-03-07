@@ -2,16 +2,29 @@
 
 ### Commentary:
 
-# This script is an attempt to make a universal interface for interaction
-# with branches for the most common tasks.
+# This script is an attempt to make a consistent interface for interaction
+# with branches for the most common tasks plus some extra features.
+
+# Features:
 # + History of branch switching.
 # + Metadata for branches.
+# + Referring to branches by ids (when using this script).
+# + Consistent and convenient command-line interface for several git commands
+#   and for operations on metadata.
+# + Cli is complemented with dialogs for branch selection and stuff.
+# + Is single file in pure python3 that can be compiled.
+#   Vague testing shows a small but evident speed boost from compilation.
 
-# Is it good? I don't know, works for me.
+# NOTE: I'm planning to expand and enhance this script
+# and this may lead to need to introduce dependencies
+# and to separate script on several files thus leading to
+# losing the 'single file, pure python3' feature.
 
 # NOTE: Metadata is local and lives in the project's .git dir.
 # For other solutions to the branch metadata problem see
-#     https://stackoverflow.com/questions/2108405/branch-descriptions-in-git
+# https://stackoverflow.com/questions/2108405/branch-descriptions-in-git
+
+# Is it good? I don't know, works for me.
 
 from sys import argv
 from enum import Enum, unique
@@ -324,7 +337,10 @@ class Metadata:
         except KeyError:
             error('Bad id: ' + id)
 
-M = Metadata() # global metadata singleton
+# Global metadata singleton.
+# Singleness is not enforced in any way,
+# it's just supposed to be single
+M = Metadata()
 
 ## IMPLEMENTATION
 
@@ -339,19 +355,11 @@ def prompt(prompt_msg):
         print()
         exit(0)
 
-def make_id_a_key(data):
-    data_by_id = {}
-    for branch in data:
-        data_by_id[data[branch]['id']] = {'branch': branch,
-                                          'annotation': data[branch]['annotation'],
-                                          'status': data[branch]['status']}
-    return data_by_id
-
 def history_is_empty():
     error('The history is empty')
 
 def history():
-    # TODO: (maybe, it's not that useful)
+    # TODO: (cannot imagine how it can be useful)
     # * store exit time in history
     # * store HEAD's hash when exited
     try:
@@ -513,13 +521,12 @@ def parse_composite_command(t, tokens, pinfo):
         value, next_t = fn(tokens)
         pinfo[field] = value
 
-def get(dict, field):
-    try:
-        return dict[field]
-    except KeyError:
-        return None
-
 def destruct_parsing_info(pinfo):
+    def get(dict, field):
+        try:
+            return dict[field]
+        except KeyError:
+            return None
     return get(pinfo, 'branch'), get(pinfo, 'new-branch'), \
            get(pinfo, 'annotation'), get(pinfo, 'status'), \
            get(pinfo, 'id')
@@ -533,6 +540,8 @@ def my_bool(arg):
 
 def boolify(*args):
     return tuple( my_bool(arg) for arg in args )
+
+## COMMANDS
 
 def annotate(branch, annotation):
     M.ini()
@@ -554,8 +563,6 @@ def set_id(branch, id):
         error('There is already a branch with ' + str_id + ' id: ' + M.id2data[str_id].branch)
     b.id = id
     M.schedule_rewrite()
-
-## COMMANDS
 
 def composite_command(field, take_field):
     def fn(_, tokens):
@@ -643,7 +650,7 @@ def print_raw_history(t, tokens):
     print_str_list(history())
 
 # TODO: make a separate manpage.
-# installed manpage will also enable git-help command
+# Installed manpage will also enable git-help command
 def print_help(t, tokens):
     print('''NAME
       git-b — Interaction with git branches for the most common tasks
@@ -702,7 +709,7 @@ STATEMENTS
           Shows deleted branches in history. Works with --history and --list-history
 
   <composite statement>
-
+       TODO
 ''')
 
 ## MAIN
