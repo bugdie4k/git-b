@@ -137,23 +137,30 @@ class Branch:
         self.status = status
 
     def cmp(self, other):
-        self_recency = int(self.recency)
-        other_recency = int(other.recency)
-        if self_recency < other_recency:
+        self_status = self.status
+        other_status = other.status
+        if self_status == 'closed' and other_status != 'closed':
             return -1
-        elif self_recency > other_recency:
+        elif self_status != 'closed' and other_status == 'closed':
             return 1
         else:
-            self_id = int(self.id)
-            other_id = int(other.id)
-            if self_id < other_id:
+            self_recency = int(self.recency)
+            other_recency = int(other.recency)
+            if self_recency < other_recency:
                 return -1
-            elif self_id > other_id:
+            elif self_recency > other_recency:
                 return 1
             else:
-                raise RuntimeError(
-                    'Found two identical ids on branch {} and branch {}'
-                    .format(self.branch, other.branch))
+                self_id = int(self.id)
+                other_id = int(other.id)
+                if self_id < other_id:
+                    return -1
+                elif self_id > other_id:
+                    return 1
+                else:
+                    raise RuntimeError(
+                        'Found two identical ids on branch {} and branch {}'
+                        .format(self.branch, other.branch))
 
     def __lt__(self, other): return self.cmp(other) < 0
     def __gt__(self, other): return self.cmp(other) > 0
