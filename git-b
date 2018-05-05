@@ -52,6 +52,15 @@ def cmd(*cmd_list):
     retstr = res.stdout.decode('utf-8')
     return rem_end_nl(retstr)
 
+## COLORS
+
+ESC = '\u001B' # Escape character
+CSI = ESC + '[' # Control Sequence Introducer
+
+# Select Graphic Rendition
+def SGR(code):
+    return CSI + str(code) + 'm'
+
 ## LEXER
 
 def integers(start=0):
@@ -182,16 +191,23 @@ def augmented_branch_str(branch_data, this_branch):
     id = branch_data.id
     branch = branch_data.branch
     annotation = branch_data.annotation
-    status = branch_data.status
-    status = '[' + status + '] ' if status else ''
+    sgr = ''
+    if branch_data.status:
+        status = '[' + branch_data.status + '] '
+        if branch_data.status == 'closed':
+            sgr = SGR(37)
+    else:
+        status = ''
     if not annotation and not status:
         row = ' {:<3} {}'.format(id, branch)
     else:
         row = ' {:<3} {:<50} {:<3} {}{}'.format(id, branch, id, status, annotation)
     if branch == this_branch:
-        return '*' + row
+        sgr = SGR(32)
+        row = '*' + row
     else:
-        return ' ' + row
+        row = ' ' + row
+    return sgr + row + SGR(0)
 
 def branches():
     retstr = cmd('git', 'for-each-ref', '--format="%(refname:short)"', 'refs/heads/')
