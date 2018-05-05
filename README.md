@@ -1,0 +1,1 @@
+[Clumsy asciinema demo](https://asciinema.org/a/179897)
