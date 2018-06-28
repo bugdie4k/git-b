@@ -15,11 +15,6 @@
 # + Is single file in pure python3 that can be compiled.
 #   Vague testing shows a small but evident speed boost from compilation.
 
-# NOTE: I'm planning to expand and enhance this script
-# and this may lead to need to introduce dependencies
-# and to separate script on several files thus leading to
-# losing the 'single file, pure python3' feature.
-
 # NOTE: Metadata is local and lives in the project's .git dir.
 # For other solutions to the branch metadata problem see
 # https://stackoverflow.com/questions/2108405/branch-descriptions-in-git
@@ -94,6 +89,7 @@ class T(Enum):
     HELP = next(__genint)
     SET_ID = next(__genint)
     SHOW_DELETED = next(__genint)
+    REINDEX = next(__genint)
 
 class Token:
     def __init__(self, type, lexem):
@@ -116,7 +112,8 @@ def option_token(arg):
         ('-rh', '-ri', '--raw-history'): T.RAW_LIST_HISTORY,
         ('-h', '-u', '--usage'): T.HELP,
         ('--id', '--set-id'): T.SET_ID,
-        ('--show-deleted',): T.SHOW_DELETED
+        ('--show-deleted',): T.SHOW_DELETED,
+        ('--reindex',): T.REINDEX
     }
     for names, tok in opt2tok.items():
         if arg in names:
@@ -250,7 +247,7 @@ class Metadata:
         try:
             f = open(Metadata.path, mode='r')
         except FileNotFoundError:
-            self.create_metadata().rewrite()
+            self.create_metadata().schedule_rewrite()
         else:
             self.read_metadata(f)
             f.close()
@@ -269,7 +266,7 @@ class Metadata:
         common = {'recency': 0, 'annotation': '', 'status': ''}
         zero_id_branches = ('master', 'trunk')
         ints = integers(1)
-        for i, branch in enumerate(self.branch_list):
+        for branch in self.branch_list:
             if branch in zero_id_branches:
                 id = 0
             else:
@@ -277,6 +274,13 @@ class Metadata:
             b_data = Branch(**dict(common, id=str(id), branch=branch))
             self.data.append(b_data)
             self.branch2data[branch] = b_data
+        return self
+
+    def reindex(self):
+        ints = integers(1)
+        for b_data in sorted(self.data, reverse=True):
+            if b_data.id != 0:
+                b_data.id = next(ints)
         return self
 
     def read_metadata(self, file):
@@ -375,8 +379,7 @@ def prompt(prompt_msg):
     try:
         return input(prompt_msg)
     except KeyboardInterrupt:
-        print()
-        exit(0)
+        kb_interrupt()
 
 def history_is_empty():
     error('The history is empty')
@@ -672,6 +675,10 @@ def print_raw_branch_list(t, tokens):
 def print_raw_history(t, tokens):
     print_str_list(history())
 
+def reindex(t, tokens):
+    M.ini().reindex().schedule_rewrite()
+    print_augmented_branches(None, None)
+
 # TODO: make a separate manpage.
 # Installed manpage will also enable git-help command
 def print_help(t, tokens):
@@ -756,7 +763,8 @@ def execute_command(args):
         T.RAW_LIST_HISTORY: print_raw_history,
         T.HELP: print_help,
         T.SET_ID: composite_command('id', take_next(took_id)),
-        T.SHOW_DELETED: lambda _, __: error('--show-deleted can only follow --history or --list-history options')
+        T.SHOW_DELETED: lambda _, __: error('--show-deleted can only follow --history or --list-history options'),
+        T.REINDEX: reindex
     }
     try:
         t = next(tokens)
