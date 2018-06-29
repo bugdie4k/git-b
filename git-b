@@ -175,12 +175,12 @@ class Branch:
     def __ge__(self, other): return self.cmp(other) >= 0
     def __ne__(self, other): return self.cmp(other) != 0
 
-def str_integers():
-    for i in integers():
+def str_integers(start=0):
+    for i in integers(start):
         yield str(i)
 
-def unique_id(ids):
-    for id in str_integers():
+def unique_id(ids,start=0):
+    for id in str_integers(start):
         if not id in ids:
             return id
 
@@ -218,6 +218,8 @@ class Metadata:
 
     path = dot_git + '/git-b-metadata'
     csv_fields_order = ['branch', 'id', 'recency', 'annotation', 'status']
+
+    zero_id_branches = ('master', 'trunk')
 
     def __init__(self):
         self._initialized = False
@@ -264,10 +266,9 @@ class Metadata:
     def create_metadata(self):
         self.maxrecency = 0
         common = {'recency': 0, 'annotation': '', 'status': ''}
-        zero_id_branches = ('master', 'trunk')
         ints = integers(1)
         for branch in self.branch_list:
-            if branch in zero_id_branches:
+            if branch in Metadata.zero_id_branches:
                 id = 0
             else:
                 id = next(ints)
@@ -279,7 +280,9 @@ class Metadata:
     def reindex(self):
         ints = integers(1)
         for b_data in sorted(self.data, reverse=True):
-            if b_data.id != 0:
+            if b_data.branch in Metadata.zero_id_branches:
+                b_data.id = 0
+            else:
                 b_data.id = next(ints)
         return self
 
@@ -329,7 +332,7 @@ class Metadata:
             common = {'recency': newrecency, 'annotation': '', 'status': ''}
             ids_set = set(map(lambda d: d.id, self.data))
             for branch in to_add:
-                newid = unique_id(ids_set)
+                newid = unique_id(ids_set, start=1)
                 ids_set.add(newid)
                 b_data = Branch(**dict(common, id=newid, branch=branch))
                 self.data.append(b_data)
