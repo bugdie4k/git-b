@@ -129,7 +129,7 @@ def option_token(arg):
         ('--id', '--set-id'): T.SET_ID,
         ('--show-deleted',): T.SHOW_DELETED,
         ('--reindex',): T.REINDEX,
-        ('--show-closed'): T.SHOW_CLOSED
+        ('--show-closed',): T.SHOW_CLOSED
     }
     for names, tok in opt2tok.items():
         if arg in names:
@@ -516,6 +516,8 @@ def common_delete_branch(t, tokens, option='-d'):
 
 
 def read_1_optional_flag(tokens, tok_type):
+    if tokens is None:
+        return False
     try:
         t = next(tokens)
     except StopIteration:
