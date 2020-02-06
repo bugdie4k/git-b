@@ -237,8 +237,23 @@ def branches():
     return list(map(lambda ln: ln.strip('"'), retstr.split('\n')))
 
 
-class Metadata:
+def find_dot_git():
     dot_git = cmd('git', 'rev-parse', '--show-toplevel') + '/.git'
+    if os.path.isdir(dot_git):
+        return dot_git
+    # assumption is that it is a submodule
+    if not os.path.isfile(dot_git):
+        raise Exception('.git is not a file, nor a dir')
+    f = open(dot_git, mode='r') 
+    dot_git_content = f.read()
+    if dot_git_content.startswith('gitdir: '):
+        return dot_git_content[len('gitdir: '):].strip('\n')
+    else:
+        raise Exception('Unexpected content in .git')
+
+
+class Metadata:
+    dot_git = find_dot_git()
 
     history_len = 40
     history_path = dot_git + '/git-b-history'
